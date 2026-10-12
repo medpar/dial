@@ -144,7 +144,7 @@ func (c *Core) claudeUsage(ctx context.Context, p vault.Profile, li liveInfo, pr
 			return usage.Report{}, errors.New("token expired; the running claude CLI will refresh it")
 		}
 		if err := c.refreshClaude(ctx, p, isLive, prev, false); err != nil {
-			return usage.Report{}, err
+			return usage.Report{}, expired(p, err)
 		}
 		cr, err = c.LoadClaude(p)
 		if err != nil {
@@ -231,7 +231,7 @@ func (c *Core) codexUsage(ctx context.Context, p vault.Profile, li liveInfo, pre
 			return usage.Report{}, errors.New("token expired; the running codex will refresh it")
 		}
 		if err := c.refreshCodex(ctx, p, isLive, prev); err != nil {
-			return usage.Report{}, err
+			return usage.Report{}, expired(p, err)
 		}
 		if a, err = c.LoadCodex(p); err != nil {
 			return usage.Report{}, err
@@ -248,6 +248,17 @@ func (c *Core) codexUsage(ctx context.Context, p vault.Profile, li liveInfo, pre
 		rep, err = codex.FetchUsage(ctx, a)
 	}
 	return rep, err
+}
+
+// expired labels a refresh the provider refused (400/401) as a dead login,
+// which `dial use` and remotes refuse to activate. Network errors pass
+// through unchanged.
+func expired(p vault.Profile, err error) error {
+	var se *httpx.StatusError
+	if errors.As(err, &se) && (se.Status == 400 || se.Status == 401) {
+		return &refreshError{fmt.Errorf("login expired; run `dial login %s:%s` (%v)", p.Provider, p.ID, err)}
+	}
+	return err
 }
 
 func isUnauthorized(err error) bool {
