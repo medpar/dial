@@ -33,6 +33,9 @@ type App struct {
 
 func (a App) overridden() bool { return a.Override != "" && os.Getenv(a.Override) != "" }
 
+// Overridden reports whether DataDir was relocated (tests, demos).
+func (a App) Overridden() bool { return a.overridden() }
+
 var Claude = App{
 	Name:     "Claude",
 	BundleID: "com.anthropic.claudefordesktop",
@@ -163,6 +166,43 @@ func (a App) Instances(ps []procs.Proc) []string {
 		if ud := userDataArg(rest); ud != "" && (a.overridden() || !samePath(ud, a.DataDir())) {
 			out = append(out, ud)
 		}
+	}
+	return out
+}
+
+// Instance is one running copy of the app and the user-data dir it uses.
+type Instance struct {
+	PID     int
+	Dir     string
+	Default bool // the app's normal window (no --user-data-dir)
+}
+
+// RunningInstances lists every running main process of the app.
+func (a App) RunningInstances(ps []procs.Proc) []Instance {
+	exe := a.execPath()
+	if exe == "" {
+		return nil
+	}
+	var out []Instance
+	for _, p := range ps {
+		if !strings.HasPrefix(p.Args, exe) {
+			continue
+		}
+		rest := p.Args[len(exe):]
+		if rest != "" && rest[0] != ' ' {
+			continue
+		}
+		ud := userDataArg(rest)
+		in := Instance{PID: p.PID, Dir: ud}
+		switch {
+		case ud == "" && a.overridden():
+			continue // the real app; never part of an overridden (test) world
+		case ud == "":
+			in.Dir, in.Default = a.DataDir(), true
+		default:
+			in.Default = samePath(ud, a.DataDir())
+		}
+		out = append(out, in)
 	}
 	return out
 }

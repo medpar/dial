@@ -17,7 +17,7 @@ func TestLiveCodexInstance(t *testing.T) {
 		t.Skip("set DIAL_LIVE_CODEX")
 	}
 	home, data := filepath.Join(root, "home"), filepath.Join(root, "data")
-	if err := PrepareCodexHome(home); err != nil {
+	if err := PrepareCodexHome(home, false); err != nil {
 		t.Fatal(err)
 	}
 	os.MkdirAll(data, 0o700)

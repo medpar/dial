@@ -92,19 +92,31 @@ If the icon is hidden behind the notch, ⌘-drag it further right in the menu ba
 
 **Codex Desktop** reads the same `~/.codex/auth.json` as the CLI, so `dial use` switches both and restarts the app if it is open.
 
-**Claude Desktop** keeps its own sign-in. dial saves each account's sign-in and swaps it in when you switch:
+**Claude Desktop** keeps its own sign-in. dial saves each account's sign-in, so you can switch the main window or run accounts side by side:
 
 ```bash
-dial desktop add claude      # reopens Claude Desktop signed out (your current sign-in is saved, not logged out)
-                             # sign in with the other account, then:
-dial use personal            # switches the CLI and Claude Desktop together
-dial desktop use work        # switch only the desktop app
+dial desktop add claude      # sign another account into Claude Desktop; it opens in its own window
+dial use personal            # switch the CLI and the main Claude window together
+dial desktop use work        # switch only the main window
+dial open personal           # open a saved account in its own window
 ```
 
-**Several accounts at once:** `dial open <account>` starts a separate Claude Desktop or Codex Desktop instance signed in as that account, each with its own data directory.
+**How sign-in works.** Claude Desktop finishes a sign-in through a `claude://` link that only the window which started it accepts, and macOS delivers that link to just one running Claude window. When several were open, the sign-in often landed in the wrong one and was ignored. `dial desktop add` therefore:
 
-- Codex windows share your config, skills, memories and session history with the main app.
-- Each Codex window keeps its own SQLite state, so instances never fight over a database.
+1. briefly closes your Claude windows;
+2. opens a single sign-in window;
+3. saves the new login as soon as you're in;
+4. reopens your windows, with the new account in its own window.
+
+Nothing is logged out. In the menu bar this is **Add account → Claude Desktop account…**, or the person icon on an account that has no Desktop sign-in yet.
+
+**Several accounts at once.** `dial open <account>` starts a separate Claude Desktop or Codex Desktop instance signed in as that account, each with its own data directory.
+
+- dial identifies each window by the login inside it, so the menu always shows which account is in the main window and which are in their own windows.
+- **Codex windows:**
+  - They share your config, skills, rules, memories and plugins.
+  - Each keeps its own thread history and state, so windows never fight over a database or inherit another account's remote-control identity.
+  - Remote (SSH) projects run on the remote host's login. That is the account dial keeps the host on, normally your main account.
 
 ## Side-by-side CLI sessions
 
@@ -178,7 +190,7 @@ dial login <account>          renew an account's login
 dial import [live|codex-auth|cps]
 dial ls | rename <account> <label> [--id] | rm <account>
 dial run <account> [-- args]  dial env <account>    dial open <account>
-dial desktop [add claude | use <account>]
+dial desktop [add claude | login <account> | use <account>]
 dial remote add|ls|rm|status|seed|sync
 dial usage [account…]         dial watch            dial waybar
 dial keepalive                dial follow           dial doctor

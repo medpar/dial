@@ -70,7 +70,8 @@ dial follows these rules:
 - **Usage:** `GET https://chatgpt.com/backend-api/wham/usage` with `ChatGPT-Account-Id`. Windows are classified by `limit_window_seconds`, not by position.
 - **App-server daemon:** Codex CLI ≥ 0.16x keeps a managed app-server daemon (`$CODEX_HOME/app-server-daemon/daemon.pid`) that holds the login in memory. After a switch, dial stops it if no interactive `codex` session is running; it restarts on demand.
 - **Desktop app:** honours `CODEX_HOME`, `CODEX_ELECTRON_USER_DATA_PATH` and `--user-data-dir`, so a second instance is `open -n --env … -a ChatGPT.app --args --user-data-dir=…`.
-- **Instance homes:** these symlink your shared content from `~/.codex` (config, skills, memories, sessions) but never SQLite files. Concurrent app-servers on one WAL database stall.
+- **Instance homes:** these symlink your shared setup from `~/.codex` (config, skills, rules, memories, plugins) but never SQLite files or `sessions/`. Concurrent app-servers on one WAL database stall, and shared rollout files would surface threads the instance's own database doesn't know.
+- **Instance state:** a new home inherits only plain preferences and remote host definitions from `.codex-global-state.json`. The rest of that file is account-bound (remote-control enrollments and environment ids, push tokens, cached account ids) or keyed by the main home's projects and threads.
 
 ## Claude Desktop specifics
 
@@ -90,7 +91,17 @@ dial follows these rules:
 
 Moves are renames on the same volume, so they are instant. A failure rolls back.
 
-**Adding an account** parks the current slice and relaunches the app signed out. dial never logs out, because logging out would revoke the saved session server-side.
+**Adding an account.** Claude Desktop completes Google and email sign-ins through `claude://…/login/…` links that carry a token only the instance that started the sign-in accepts ("Google sign-in code does not answer a sign-in this app started; ignoring"). macOS delivers the link to a single running instance, so with several windows open the sign-in is often lost. dial therefore:
+
+1. Quits every Claude instance.
+2. Launches one instance on a fresh `.signin-*` data dir.
+3. Polls its `config.json` until a login is present and stable.
+4. Quits it and adopts the dir as that account's home.
+5. Relaunches the instances that were open, plus the new account's window.
+
+dial never logs out, because logging out would revoke the saved session server-side.
+
+**Detection is by content.** Each running instance's account is read from its own `config.json`, never inferred from the directory name. Idle homes whose content no longer matches their name, for example because someone signed a different account into a window, are renamed to match.
 
 **Separate windows.** A parked directory is a valid user-data dir. `open -n -a Claude --args --user-data-dir=<dir>` runs it as a separate instance. Electron's single-instance lock is per data dir, and the "Claude Safe Storage" key is shared, so cookies decrypt in any instance.
 

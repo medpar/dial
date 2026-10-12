@@ -94,7 +94,7 @@ struct MenuView: View {
             Menu {
                 Menu("Add account") {
                     Button("Claude (CLI login)…") { DialClient.openInTerminal(["add", "claude"], title: "dial-add-claude") }
-                    Button("Claude Desktop account…") { DialClient.openInTerminal(["desktop", "add", "claude"], title: "dial-desktop-add") }
+                    Button("Claude Desktop account…") { DesktopSignin.start(account: nil, label: nil) }
                     Button("Codex…") { DialClient.openInTerminal(["add", "codex"], title: "dial-add-codex") }
                 }
                 Button("Import current logins") { Task { _ = try? await DialClient.run(["import"]); await store.load(refresh: true) } }
@@ -272,18 +272,31 @@ struct AccountRow: View {
         return parts.joined(separator: " · ")
     }
 
+    // Where this account is in use: the CLI, the app's main window, or a
+    // window of its own. Shown as explicit tags so they can't be confused.
     @ViewBuilder private var badges: some View {
         HStack(spacing: 4) {
-            if p.window == true { Tag(text: "window", systemImage: "macwindow.on.rectangle") }
-            else if p.desktop == "live" && desktopInstalled { Tag(text: "app", systemImage: "macwindow") }
+            if p.active { Tag(text: "CLI", systemImage: "terminal") }
+            if desktopInstalled {
+                if p.desktop == "live" { Tag(text: provider == "claude" ? "main window" : "app", systemImage: "macwindow") }
+                if p.window == true { Tag(text: "own window", systemImage: "macwindow.on.rectangle") }
+            }
         }
     }
 
+    private var needsDesktopSignin: Bool { provider == "claude" && desktopInstalled && p.desktop == nil }
+
     @ViewBuilder private var actions: some View {
         HStack(spacing: 2) {
-            if desktopInstalled && !(p.active && p.desktop == "live") {
+            if needsDesktopSignin {
+                Button { DesktopSignin.start(account: "claude:\(p.id)", label: p.label) } label: { Image(systemName: "person.badge.plus") }
+                    .buttonStyle(IconButtonStyle()).help("Sign \(p.label) in to Claude Desktop (opens in its own window)")
+            } else if desktopInstalled && p.desktop != "live" && p.window != true {
                 Button { Task { await store.openWindow(provider, p) } } label: { Image(systemName: "macwindow.badge.plus") }
                     .buttonStyle(IconButtonStyle()).help("Open in its own \(provider == "claude" ? "Claude" : "Codex") window")
+            } else if p.window == true {
+                Button { Task { await store.openWindow(provider, p) } } label: { Image(systemName: "macwindow.on.rectangle") }
+                    .buttonStyle(IconButtonStyle()).help("Bring its window to the front")
             }
             Button { DialClient.openInTerminal(["run", "\(provider):\(p.id)"], title: "dial-run-\(provider)-\(p.id)") } label: { Image(systemName: "terminal") }
                 .buttonStyle(IconButtonStyle()).help("Run \(provider) as \(p.label) in Terminal")
@@ -300,6 +313,9 @@ struct AccountRow: View {
         Button("Run in Terminal") { DialClient.openInTerminal(["run", "\(provider):\(p.id)"], title: "dial-run-\(provider)-\(p.id)") }
         Divider()
         Button("Renew login…") { DialClient.openInTerminal(["login", "\(provider):\(p.id)"], title: "dial-login-\(p.id)") }
+        if provider == "claude" && desktopInstalled {
+            Button(p.desktop == nil ? "Sign in to Claude Desktop…" : "Renew Claude Desktop sign-in…") { DesktopSignin.start(account: "claude:\(p.id)", label: p.label) }
+        }
         Button("Copy id") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("\(provider):\(p.id)", forType: .string) }
     }
 }
@@ -383,5 +399,23 @@ struct IconButtonStyle: ButtonStyle {
             .frame(width: 22, height: 20)
             .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(configuration.isPressed ? 0.15 : 0)))
             .contentShape(Rectangle())
+    }
+}
+
+/// Starts a Claude Desktop sign-in after explaining that Claude windows close
+/// for a moment: the sign-in callback only reaches the right window when it
+/// is the only one running.
+enum DesktopSignin {
+    static func start(account: String?, label: String?) {
+        let alert = NSAlert()
+        alert.messageText = label.map { "Sign \($0) in to Claude Desktop" } ?? "Add a Claude Desktop account"
+        alert.informativeText = "Dial closes your Claude windows for a moment and opens one sign-in window, so the sign-in can't land in the wrong window. Running Claude Desktop agents pause. When you're signed in, your windows reopen and the account opens in its own window."
+        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var args = ["desktop"]
+        if let account { args += ["login", account] } else { args += ["add", "claude"] }
+        DialClient.openInTerminal(args, title: "dial-desktop-signin")
     }
 }

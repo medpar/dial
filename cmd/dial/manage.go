@@ -267,18 +267,43 @@ func cmdDesktop(args []string) {
 		for _, w := range xs.Windows {
 			fmt.Printf("   %-36s %s\n", w, ui.Cyan("own window"))
 		}
-	case "add":
+	case "add", "login":
 		prov := vault.Claude
+		var expect vault.Profile
 		if len(o.pos) > 1 {
-			prov, _ = vault.ParseProvider(o.pos[1])
+			if p, ok := vault.ParseProvider(o.pos[1]); ok {
+				prov = p
+			} else if sub == "login" {
+				p, err := c.Vault.Resolve(o.pos[1], vault.Claude)
+				die(err)
+				expect = p
+			}
 		}
 		if prov != vault.Claude {
 			dief("Codex Desktop uses the Codex CLI login: run `dial add codex`")
 		}
-		die(c.AddClaudeDesktop())
-		ui.OK("Claude Desktop reopened signed out; your previous login is saved.")
-		fmt.Println("Sign in with the other account. dial picks it up on the next switch.")
-		fmt.Println("Also add its CLI login (needed for usage and the VPS): dial add claude")
+		opt := core.SigninOptions{
+			Expect:   expect.AccountID,
+			NoWindow: o.has("no-window"),
+			Progress: func(s string) { fmt.Println(ui.Cyan("→ ") + s) },
+		}
+		acct, err := c.AddClaudeDesktop(opt)
+		if o.has("json") {
+			msg := "ok"
+			if err != nil {
+				msg = err.Error()
+			}
+			printJSON(map[string]any{"ok": err == nil, "message": msg, "account": acct})
+			return
+		}
+		die(err)
+		ui.OK(fmt.Sprintf("Saved Claude Desktop login for %s", ui.Bold(acct.Label)))
+		if acct.Window {
+			ui.OK("It is open in its own window; your other windows are back.")
+		}
+		if acct.ProfileID == "" {
+			fmt.Println("Add its CLI login too (usage, terminal sessions, the VPS): dial add claude")
+		}
 	case "use", "switch":
 		if len(o.pos) < 2 {
 			dief("usage: dial desktop use <account>")

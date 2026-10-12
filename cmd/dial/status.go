@@ -206,9 +206,13 @@ func renderStatus(st Status) {
 			tags := ""
 			switch p.Desktop {
 			case "live":
-				tags += ui.Dim(" ⌂app")
+				if ps.Provider == "claude" {
+					tags += ui.Dim(" ⌂main window")
+				} else {
+					tags += ui.Dim(" ⌂app")
+				}
 			case "window":
-				tags += ui.Cyan(" ⧉window")
+				tags += ui.Cyan(" ⧉own window")
 			case "saved":
 				tags += ui.Dim(" ⌂saved")
 			}

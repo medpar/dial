@@ -35,7 +35,8 @@ SIDE BY SIDE
   dial env <account>            print exports for a shell (eval "$(dial env x)")
   dial open <account>           open a desktop window signed in as <account>
   dial desktop                  desktop app status
-  dial desktop add claude       sign another account into Claude Desktop
+  dial desktop add claude       sign another account into Claude Desktop (opens it in its own window)
+  dial desktop login <account>  renew an account's Claude Desktop sign-in
   dial desktop use <account>    switch only the desktop app
 
 REMOTES

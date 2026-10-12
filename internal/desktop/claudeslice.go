@@ -271,3 +271,78 @@ func CleanTrash() {
 		}
 	}
 }
+
+// NewSigninDir creates an empty user-data dir for signing in a new account.
+func NewSigninDir() (string, error) {
+	if err := os.MkdirAll(ClaudeHomes(), 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(ClaudeHomes(), ".signin-")
+}
+
+// SeedSettings copies app-wide settings (MCP config, preferences) from the
+// main data dir into dir.
+func SeedSettings(from, dir string) { seedShared(from, dir) }
+
+// AdoptSignin turns a finished sign-in dir into that account's home. A home
+// that already exists gets the fresh login; the old one goes to trash.
+func AdoptSignin(dir string) (DesktopAccount, error) {
+	acct := ClaudeAccountIn(dir)
+	if !acct.LoggedIn {
+		return acct, fmt.Errorf("no sign-in found")
+	}
+	home := ClaudeHome(acct.AccountUUID)
+	if _, err := os.Stat(home); os.IsNotExist(err) {
+		if err := os.Rename(dir, home); err != nil {
+			return acct, err
+		}
+		acct.Dir = home
+		return acct, nil
+	}
+	trash := newTrash()
+	if err := moveSlice(dir, home, trash); err != nil {
+		return acct, err
+	}
+	_ = os.MkdirAll(trash, 0o700)
+	_ = move(dir, filepath.Join(trash, "signin"))
+	acct.Dir = home
+	return acct, nil
+}
+
+// ReconcileClaudeHomes makes every idle home hold the account it is named
+// after. Someone may have signed a different account into a window; its
+// login is moved under the right name so lookups by account stay correct.
+// busy holds dirs of running instances, which are never touched.
+func ReconcileClaudeHomes(busy func(dir string) bool) {
+	entries, _ := os.ReadDir(ClaudeHomes())
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		dir := filepath.Join(ClaudeHomes(), e.Name())
+		acct := ClaudeAccountIn(dir)
+		if !acct.LoggedIn || acct.AccountUUID == e.Name() || busy(dir) {
+			continue
+		}
+		target := ClaudeHome(acct.AccountUUID)
+		if busy(target) || ClaudeAccountIn(target).LoggedIn {
+			continue // the right home already holds a login; leave both alone
+		}
+		_ = moveSlice(dir, target, newTrash())
+		seedShared(dir, target)
+	}
+}
+
+// StaleSignins removes sign-in dirs abandoned more than a day ago.
+func StaleSignins(busy func(dir string) bool) {
+	entries, _ := os.ReadDir(ClaudeHomes())
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), ".signin-") {
+			continue
+		}
+		dir := filepath.Join(ClaudeHomes(), e.Name())
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > 24*time.Hour && !busy(dir) {
+			_ = os.RemoveAll(dir)
+		}
+	}
+}

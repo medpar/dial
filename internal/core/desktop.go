@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/medpar/dial/internal/codex"
@@ -23,9 +24,9 @@ type DesktopAccount struct {
 	AccountUUID string `json:"account_uuid"`
 	ProfileID   string `json:"profile_id,omitempty"`
 	Label       string `json:"label"`
-	Live        bool   `json:"live"`   // signed in to the main app
+	Live        bool   `json:"live"`   // signed in to the main window
 	Window      bool   `json:"window"` // running in its own window
-	Saved       bool   `json:"saved"`  // a parked login exists
+	Saved       bool   `json:"saved"`  // a saved login exists (not running)
 }
 
 type DesktopStatus struct {
@@ -46,46 +47,116 @@ func (c *Core) claudeProfileForAccount(uuid string) (vault.Profile, bool) {
 	return vault.Profile{}, false
 }
 
-// ClaudeDesktopStatus lists the main app login and every parked one.
+// claudeView is what is running right now, identified by content: the
+// account inside each instance's data dir, never the dir's name.
+type claudeView struct {
+	instances []desktop.Instance
+	accounts  map[string]string // dir → account uuid signed in there
+	busy      map[string]bool   // dirs used by a running instance
+}
+
+func (c *Core) viewClaude() claudeView {
+	app := desktop.Claude
+	v := claudeView{accounts: map[string]string{}, busy: map[string]bool{}}
+	for _, in := range app.RunningInstances(procs.List()) {
+		// With a relocated data dir (tests, demos) only dial's own dirs
+		// count, so real windows are never quit or relaunched.
+		if app.Overridden() && !under(in.Dir, app.DataDir()) && !under(in.Dir, desktop.ClaudeHomes()) {
+			continue
+		}
+		v.instances = append(v.instances, in)
+	}
+	for _, in := range v.instances {
+		v.busy[filepath.Clean(in.Dir)] = true
+		if a := desktop.ClaudeAccountIn(in.Dir); a.LoggedIn {
+			v.accounts[filepath.Clean(in.Dir)] = a.AccountUUID
+		}
+	}
+	return v
+}
+
+func under(path, root string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	return err == nil && !strings.HasPrefix(rel, "..")
+}
+
+func (v claudeView) isBusy(dir string) bool { return v.busy[filepath.Clean(dir)] }
+
+// runningWith returns the instance currently signed in as account.
+func (v claudeView) runningWith(account string) (desktop.Instance, bool) {
+	for _, in := range v.instances {
+		if v.accounts[filepath.Clean(in.Dir)] == account {
+			return in, true
+		}
+	}
+	return desktop.Instance{}, false
+}
+
+func (c *Core) reconcileClaude() claudeView {
+	v := c.viewClaude()
+	desktop.ReconcileClaudeHomes(v.isBusy)
+	desktop.StaleSignins(v.isBusy)
+	return v
+}
+
+func (c *Core) desktopLabel(uuid string) (string, string) {
+	if p, ok := c.claudeProfileForAccount(uuid); ok {
+		return p.ID, p.Display()
+	}
+	if len(uuid) > 8 {
+		return "", "account " + uuid[:8]
+	}
+	return "", "account " + uuid
+}
+
+// ClaudeDesktopStatus lists the main window's login, every extra window and
+// every saved login, identified by what each data dir actually holds.
 func (c *Core) ClaudeDesktopStatus() DesktopStatus {
 	app := desktop.Claude
 	st := DesktopStatus{Installed: app.Installed()}
 	if !st.Installed {
 		return st
 	}
-	ps := procs.List()
-	data := app.DataDir()
-	st.Running = len(app.PIDs(ps, data)) > 0
-	seen := map[string]bool{}
-	add := func(a desktop.DesktopAccount, live bool) {
-		if a.AccountUUID == "" || seen[a.AccountUUID] {
+	v := c.reconcileClaude()
+	seen := map[string]int{}
+	add := func(uuid string, fn func(*DesktopAccount)) {
+		if uuid == "" {
 			return
 		}
-		seen[a.AccountUUID] = true
-		da := DesktopAccount{AccountUUID: a.AccountUUID, Live: live, Saved: a.LoggedIn}
-		if p, ok := c.claudeProfileForAccount(a.AccountUUID); ok {
-			da.ProfileID, da.Label = p.ID, p.Display()
-		} else {
-			da.Label = "account " + a.AccountUUID[:8]
+		i, ok := seen[uuid]
+		if !ok {
+			pid, label := c.desktopLabel(uuid)
+			st.Accounts = append(st.Accounts, DesktopAccount{AccountUUID: uuid, ProfileID: pid, Label: label})
+			i = len(st.Accounts) - 1
+			seen[uuid] = i
 		}
-		if !live {
-			da.Window = len(app.PIDs(ps, desktop.ClaudeHome(a.AccountUUID))) > 0
-		}
-		st.Accounts = append(st.Accounts, da)
+		fn(&st.Accounts[i])
 	}
-	if cur := desktop.ClaudeAccountIn(data); cur.LoggedIn {
-		add(cur, true)
+	for _, in := range v.instances {
+		uuid := v.accounts[filepath.Clean(in.Dir)]
+		if in.Default {
+			st.Running = true
+			add(uuid, func(a *DesktopAccount) { a.Live = true })
+		} else {
+			add(uuid, func(a *DesktopAccount) { a.Window = true })
+		}
+	}
+	if !st.Running {
+		if cur := desktop.ClaudeAccountIn(app.DataDir()); cur.LoggedIn {
+			add(cur.AccountUUID, func(a *DesktopAccount) { a.Live = true })
+		}
 	}
 	for _, a := range desktop.ParkedClaude() {
-		if a.LoggedIn {
-			add(a, false)
+		if a.LoggedIn && !v.isBusy(a.Dir) {
+			add(a.AccountUUID, func(d *DesktopAccount) { d.Saved = true })
 		}
 	}
 	return st
 }
 
-// SwitchClaudeDesktop signs the main Claude app into p's account by
-// swapping parked logins. The app is quit and relaunched if it was open.
+// SwitchClaudeDesktop signs the main Claude window into p's account by
+// swapping saved logins. The app is quit and relaunched if it was open;
+// extra windows keep running.
 func (c *Core) SwitchClaudeDesktop(p vault.Profile) error {
 	if p.Provider != vault.Claude {
 		return errors.New("not a Claude profile")
@@ -103,12 +174,13 @@ func (c *Core) switchClaudeDesktopAccount(target, label string) error {
 	if cur.LoggedIn && cur.AccountUUID == target {
 		return nil
 	}
-	home := desktop.ClaudeHome(target)
-	if app.Running(home) {
-		return fmt.Errorf("%s is open in its own Claude window; close it first", label)
+	v := c.reconcileClaude()
+	if in, ok := v.runningWith(target); ok && !in.Default {
+		return fmt.Errorf("%s is open in its own Claude window; close that window first", label)
 	}
+	home := desktop.ClaudeHome(target)
 	if !desktop.ClaudeAccountIn(home).LoggedIn {
-		return fmt.Errorf("no saved Claude Desktop login for %s yet: run `dial desktop add claude`, sign in as %s, then switch", label, label)
+		return fmt.Errorf("no saved Claude Desktop login for %s yet: run `dial desktop add claude` and sign in as %s", label, label)
 	}
 	wasRunning := app.Running(data)
 	if wasRunning {
@@ -145,30 +217,151 @@ func (c *Core) switchClaudeDesktopAccount(target, label string) error {
 	return nil
 }
 
-// AddClaudeDesktop parks the current login and opens the app signed out so
-// another account can sign in. The previous login stays saved (no logout,
-// so its server-side session is not revoked).
-func (c *Core) AddClaudeDesktop() error {
+// SigninOptions tune AddClaudeDesktop.
+type SigninOptions struct {
+	Expect   string        // account uuid the user should sign in as (renewals)
+	NoWindow bool          // don't open the new account in its own window
+	Timeout  time.Duration // how long to wait for the sign-in
+	Progress func(string)  // status lines for the caller
+}
+
+// AddClaudeDesktop signs a new account into Claude Desktop.
+//
+// Claude Desktop finishes a sign-in through a claude:// link carrying a
+// token only the instance that started it accepts, and macOS hands that link
+// to just one running instance. So every Claude window is closed first and
+// the sign-in happens in a single, fresh window. When it completes, that
+// login is saved as the account's home, the windows that were open come
+// back, and the new account opens in its own window. Nothing is logged out.
+func (c *Core) AddClaudeDesktop(opt SigninOptions) (DesktopAccount, error) {
 	app := desktop.Claude
-	if !app.Installed() {
-		return errors.New("Claude desktop app is not installed")
-	}
-	data := app.DataDir()
-	if app.Running(data) {
-		if err := app.Quit(data, quitTimeout); err != nil {
-			return err
+	say := func(s string) {
+		if opt.Progress != nil {
+			opt.Progress(s)
 		}
+	}
+	if !app.Installed() {
+		return DesktopAccount{}, errors.New("Claude desktop app is not installed")
+	}
+	if opt.Timeout == 0 {
+		opt.Timeout = 15 * time.Minute
+	}
+	v := c.reconcileClaude()
+	before := v.instances
+	if len(before) > 0 {
+		say(fmt.Sprintf("Closing %d Claude window(s) so the sign-in reaches the right one…", len(before)))
+	}
+	for _, in := range before {
+		if err := app.Quit(in.Dir, quitTimeout); err != nil {
+			return DesktopAccount{}, err
+		}
+	}
+	restore := func(extra ...string) {
+		for _, in := range before {
+			_ = app.Launch(in.Dir, nil)
+		}
+		for _, dir := range extra {
+			_ = app.Launch(dir, nil)
+		}
+	}
+	dir, err := desktop.NewSigninDir()
+	if err != nil {
+		restore()
+		return DesktopAccount{}, err
+	}
+	desktop.SeedSettings(app.DataDir(), dir)
+	if err := app.Launch(dir, nil); err != nil {
+		_ = os.RemoveAll(dir)
+		restore()
+		return DesktopAccount{}, err
+	}
+	say("Sign in with the account to add in the Claude window that just opened.")
+	acct, err := waitForSignin(app, dir, opt.Timeout)
+	if err == nil {
+		say("Signed in. Saving the login…")
+		// Give the app a moment to persist cookies and tokens, then quit it.
+		time.Sleep(3 * time.Second)
+	}
+	if qerr := app.Quit(dir, quitTimeout); qerr != nil && err == nil {
+		err = qerr
+	}
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		restore()
+		return DesktopAccount{}, err
+	}
+	if opt.Expect != "" && acct.AccountUUID != opt.Expect {
+		_ = os.RemoveAll(dir)
+		restore()
+		_, want := c.desktopLabel(opt.Expect)
+		return DesktopAccount{}, fmt.Errorf("you signed in as a different account than %s; nothing was changed", want)
+	}
+	// Each login lives in one place: if the main window already holds this
+	// account, the new sign-in is redundant.
+	if main := desktop.ClaudeAccountIn(app.DataDir()); main.LoggedIn && main.AccountUUID == acct.AccountUUID {
+		_ = os.RemoveAll(dir)
+		restore()
+		pid, label := c.desktopLabel(acct.AccountUUID)
+		return DesktopAccount{AccountUUID: acct.AccountUUID, ProfileID: pid, Label: label, Live: true},
+			fmt.Errorf("%s is already the main window's account; sign in with a different account", label)
 	}
 	l, err := c.Lock()
 	if err != nil {
-		return err
+		restore()
+		return DesktopAccount{}, err
 	}
-	_, err = desktop.ParkClaude(data)
+	adopted, err := desktop.AdoptSignin(dir)
 	l.Release()
 	if err != nil {
-		return err
+		restore()
+		return DesktopAccount{}, err
 	}
-	return app.Launch(data, nil)
+	pid, label := c.desktopLabel(adopted.AccountUUID)
+	res := DesktopAccount{AccountUUID: adopted.AccountUUID, ProfileID: pid, Label: label, Saved: true}
+	wasOpen := false
+	for _, in := range before {
+		if filepath.Clean(in.Dir) == filepath.Clean(adopted.Dir) {
+			wasOpen = true
+		}
+	}
+	if opt.NoWindow || wasOpen {
+		restore()
+	} else {
+		restore(adopted.Dir)
+		res.Window, res.Saved = true, false
+	}
+	return res, nil
+}
+
+// waitForSignin polls dir until a login is present and stable, the window
+// is closed, or timeout passes.
+func waitForSignin(app desktop.App, dir string, timeout time.Duration) (desktop.DesktopAccount, error) {
+	deadline := time.Now().Add(timeout)
+	started := false
+	var last string
+	stable := 0
+	for time.Now().Before(deadline) {
+		running := app.Running(dir)
+		if running {
+			started = true
+		} else if started {
+			return desktop.DesktopAccount{}, errors.New("the sign-in window was closed before signing in")
+		}
+		a := desktop.ClaudeAccountIn(dir)
+		if a.LoggedIn && a.AccountUUID == last {
+			stable++
+			if stable >= 2 {
+				return a, nil
+			}
+		} else {
+			stable = 0
+		}
+		if a.LoggedIn {
+			last = a.AccountUUID
+		}
+		time.Sleep(time.Second)
+	}
+	return desktop.DesktopAccount{}, errors.New("timed out waiting for the sign-in")
 }
 
 // OpenClaudeWindow runs p's Claude Desktop login in its own window.
@@ -177,13 +370,17 @@ func (c *Core) OpenClaudeWindow(p vault.Profile) error {
 	if !app.Installed() {
 		return errors.New("Claude desktop app is not installed")
 	}
+	v := c.reconcileClaude()
+	if in, ok := v.runningWith(p.AccountID); ok {
+		if in.Default {
+			return fmt.Errorf("%s is the main Claude window's account; switch the main window to another account first", p.Display())
+		}
+		return app.Focus(in.Dir)
+	}
 	if cur := desktop.ClaudeAccountIn(app.DataDir()); cur.LoggedIn && cur.AccountUUID == p.AccountID {
 		return fmt.Errorf("%s is the main Claude window's account; switch the main window to another account first", p.Display())
 	}
 	home := desktop.ClaudeHome(p.AccountID)
-	if app.Running(home) {
-		return app.Focus(home)
-	}
 	if !desktop.ClaudeAccountIn(home).LoggedIn {
 		return fmt.Errorf("no saved Claude Desktop login for %s yet: run `dial desktop add claude` and sign in as %s", p.Display(), p.Display())
 	}
@@ -192,7 +389,9 @@ func (c *Core) OpenClaudeWindow(p vault.Profile) error {
 
 // ------------------------------------------------------------------ Codex
 
-// CodexDesktopStatus reports the main app and per-profile windows.
+// CodexDesktopStatus reports the main app and per-profile windows. A
+// window is attributed to the account in its CODEX_HOME's auth.json, so a
+// window someone signed into another account inside is reported correctly.
 func (c *Core) CodexDesktopStatus() DesktopStatus {
 	app := desktop.Codex
 	st := DesktopStatus{Installed: app.Installed()}
@@ -202,9 +401,20 @@ func (c *Core) CodexDesktopStatus() DesktopStatus {
 	ps := procs.List()
 	st.Running = len(app.PIDs(ps, app.DataDir())) > 0
 	list, _ := c.Vault.List(vault.Codex)
+	seen := map[string]bool{}
 	for _, p := range list {
-		if len(app.PIDs(ps, desktop.CodexInstanceData(p.ID))) > 0 {
-			st.Windows = append(st.Windows, p.ID)
+		if len(app.PIDs(ps, desktop.CodexInstanceData(p.ID))) == 0 {
+			continue
+		}
+		id := p.ID
+		if a, err := codex.Load(filepath.Join(desktop.CodexInstanceHome(p.ID), codex.AuthFile)); err == nil && a.HasLogin() {
+			if q, ok := c.Vault.FindByKey(vault.Codex, a.Identity().Key()); ok {
+				id = q.ID
+			}
+		}
+		if !seen[id] {
+			seen[id] = true
+			st.Windows = append(st.Windows, id)
 		}
 	}
 	return st
@@ -250,7 +460,7 @@ func (c *Core) codexHomeBusy(p vault.Profile) bool {
 // prepareCodexHome syncs and seeds p's private CODEX_HOME.
 func (c *Core) prepareCodexHome(p vault.Profile) (string, error) {
 	home := desktop.CodexInstanceHome(p.ID)
-	if err := desktop.PrepareCodexHome(home); err != nil {
+	if err := desktop.PrepareCodexHome(home, c.codexHomeBusy(p)); err != nil {
 		return "", err
 	}
 	l, err := c.Lock()
