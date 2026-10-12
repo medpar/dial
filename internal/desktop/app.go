@@ -25,7 +25,13 @@ type App struct {
 	Exec     string   // main executable inside Contents/MacOS
 	// DataDir returns the default user-data directory.
 	DataDir func() string
+	// Override names the env var that relocates DataDir (tests, demos).
+	// When set, the "default" instance is the one launched with
+	// --user-data-dir=<DataDir>, never the real app launched without it.
+	Override string
 }
+
+func (a App) overridden() bool { return a.Override != "" && os.Getenv(a.Override) != "" }
 
 var Claude = App{
 	Name:     "Claude",
@@ -33,6 +39,7 @@ var Claude = App{
 	Bundles:  []string{"Claude.app"},
 	Exec:     "Claude",
 	DataDir:  paths.ClaudeDesktopData,
+	Override: "DIAL_CLAUDE_DESKTOP_DATA",
 }
 
 var Codex = App{
@@ -40,6 +47,7 @@ var Codex = App{
 	BundleID: "com.openai.codex",
 	Bundles:  []string{"ChatGPT.app", "Codex.app"},
 	DataDir:  paths.CodexDesktopData,
+	Override: "DIAL_CODEX_DESKTOP_DATA",
 }
 
 // Path finds the installed bundle.
@@ -115,7 +123,7 @@ func (a App) PIDs(ps []procs.Proc, dataDir string) []int {
 	if exe == "" {
 		return nil
 	}
-	isDefault := samePath(dataDir, a.DataDir())
+	isDefault := samePath(dataDir, a.DataDir()) && !a.overridden()
 	var out []int
 	for _, p := range ps {
 		if !strings.HasPrefix(p.Args, exe) {
@@ -152,7 +160,7 @@ func (a App) Instances(ps []procs.Proc) []string {
 		if rest != "" && rest[0] != ' ' {
 			continue
 		}
-		if ud := userDataArg(rest); ud != "" && !samePath(ud, a.DataDir()) {
+		if ud := userDataArg(rest); ud != "" && (a.overridden() || !samePath(ud, a.DataDir())) {
 			out = append(out, ud)
 		}
 	}
@@ -186,7 +194,7 @@ func (a App) Quit(dataDir string, timeout time.Duration) error {
 	for _, pid := range pids {
 		kids = append(kids, childPIDs(pid)...)
 	}
-	onlyDefault := samePath(dataDir, a.DataDir()) && len(a.Instances(ps)) == 0
+	onlyDefault := samePath(dataDir, a.DataDir()) && !a.overridden() && len(a.Instances(ps)) == 0
 	if onlyDefault {
 		// AppleScript quit runs the app's own quit path (flushes cookies,
 		// LevelDB). It is ambiguous once extra instances run, so then we
@@ -219,7 +227,7 @@ func (a App) Launch(dataDir string, env map[string]string) error {
 		return err
 	}
 	args := []string{}
-	isDefault := samePath(dataDir, a.DataDir())
+	isDefault := samePath(dataDir, a.DataDir()) && !a.overridden()
 	if !isDefault {
 		args = append(args, "-n")
 	}
