@@ -82,13 +82,43 @@ enum DialClient {
         try await decode(SimpleResult.self, ["open", "\(provider):\(id)", "--json"])
     }
 
-    /// Opens Terminal running `dial <args>` (no Automation permission needed).
+    /// Opens Terminal running `dial <args>` (no Automation permission needed:
+    /// Terminal runs a .command file). The window closes itself when the task
+    /// ends: right away on success, after 30 s or a key press on failure so the
+    /// error stays readable.
     static func openInTerminal(_ args: [String], title: String) {
         let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".dial/tmp", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("\(title.replacingOccurrences(of: "/", with: "-")).command")
         let quoted = ([binary] + args).map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
-        let script = "#!/bin/zsh -l\nclear\n\(quoted)\n"
+        let script = """
+        #!/bin/zsh -l
+        printf '\\e]0;dial\\a'
+        clear
+        # Ctrl-C stops the task, not this wrapper, so the window still closes.
+        trap 'true' INT
+        \(quoted)
+        code=$?
+        if [ $code -eq 0 ]; then
+          print -P '\\n%F{green}✓ Done%f — closing…'
+          sleep 1.2
+        else
+          print -P "\\n%F{yellow}Finished with errors (exit $code).%f Press any key to close (closes in 30 s)."
+          read -k1 -s -t 30
+        fi
+        # Find this window while the shell is alive (its tty goes away on exit),
+        # then close it by id once the shell has exited.
+        me=$(tty)
+        wid=$(osascript -e "tell application \\"Terminal\\"" \\
+          -e "repeat with w in windows" \\
+          -e "if tty of selected tab of w is \\"$me\\" then return id of w" \\
+          -e "end repeat" -e "end tell" 2>/dev/null)
+        if [ -n "$wid" ]; then
+          nohup osascript -e "delay 0.5" -e "tell application \\"Terminal\\" to close (window id $wid) saving no" >/dev/null 2>&1 &!
+        fi
+        exit $code
+
+        """
         try? script.write(to: file, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
         let p = Process()
