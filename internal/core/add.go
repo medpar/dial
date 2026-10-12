@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/medpar/dial/internal/claude"
 	"github.com/medpar/dial/internal/codex"
@@ -28,6 +30,7 @@ func isolatedLogin(p vault.Provider, opt LoginOptions) (dir string, cleanup func
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", nil, err
 	}
+	cleanStaleLogins(root)
 	dir, err = os.MkdirTemp(root, "login-")
 	if err != nil {
 		return "", nil, err
@@ -73,6 +76,26 @@ func isolatedLogin(p vault.Provider, opt LoginOptions) (dir string, cleanup func
 		return "", nil, fmt.Errorf("%s login failed: %w", bin, err)
 	}
 	return dir, cleanup, nil
+}
+
+// cleanStaleLogins removes throwaway homes (and their keychain items) left
+// behind by logins that were interrupted more than an hour ago.
+func cleanStaleLogins(root string) {
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "login-") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || time.Since(info.ModTime()) < time.Hour {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if keychain.Available() {
+			_ = keychain.Delete(claude.DirTarget(dir).KeychainService(), "")
+		}
+		_ = os.RemoveAll(dir)
+	}
 }
 
 // Add logs in a new account without disturbing the current one and stores
