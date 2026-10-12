@@ -18,7 +18,7 @@ If you have more than one Claude or ChatGPT/Codex account (personal, work, team 
 - **Instant switching.** `dial use work` swaps the Claude Code / Codex CLI login and the matching desktop app. Remote machines follow automatically.
 - **No re-authentication.** Each account logs in once. dial keeps stored logins fresh and folds tokens refreshed by the CLIs back into its vault.
 - **Side by side.** Run several accounts at the same time: separate Claude Desktop and Codex Desktop windows (`dial open`) and isolated CLI sessions (`dial run`).
-- **Remote sync.** When you switch on your Mac, your VPS switches too, so Claude Code Remote Control and Codex sessions there run on the same account. It works over plain `ssh`.
+- **Remote sync.** When you switch on your Mac, your VPS switches too, so Claude Code Remote Control and Codex sessions there run on the same account. It works over plain `ssh`. Account changes made outside dial (signing in inside Claude Desktop, `codex login`) are followed within seconds.
 - **Usage at a glance.** 5-hour and weekly windows, per-model limits, reset countdowns, credits and limit-reset counts for every account, in the menu bar or terminal.
 - **Small and fast.** A dependency-free Go CLI (≈7 MB) plus a native Swift menu bar app using about 27 MB of RAM. No Electron, no background daemon, no telemetry.
 - **macOS and Linux.** The CLI, remote sync and usage work everywhere. The desktop app features and menu bar are macOS only. On Linux, `dial watch` and a waybar module cover the display.
@@ -181,7 +181,8 @@ dial run <account> [-- args]  dial env <account>    dial open <account>
 dial desktop [add claude | use <account>]
 dial remote add|ls|rm|status|seed|sync
 dial usage [account…]         dial watch            dial waybar
-dial keepalive                dial doctor           dial config [key [value]]
+dial keepalive                dial follow           dial doctor
+dial config [key [value]]
 ```
 
 Most commands accept `--json`.

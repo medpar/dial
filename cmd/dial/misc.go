@@ -22,6 +22,7 @@ func cmdKeepAlive(args []string) {
 	o := parse(args)
 	c := core.New()
 	c.SyncCodexWindows()
+	c.FollowExternalChanges(context.Background())
 	done := c.KeepAlive(context.Background())
 	if o.has("json") {
 		printJSON(map[string]any{"refreshed": done})
@@ -32,6 +33,26 @@ func cmdKeepAlive(args []string) {
 		return
 	}
 	ui.OK("Refreshed " + strings.Join(done, ", "))
+}
+
+func cmdFollow(args []string) {
+	o := parse(args)
+	c := core.New()
+	res := c.FollowExternalChanges(context.Background())
+	if o.has("json") {
+		printJSON(map[string]any{"synced": res})
+		return
+	}
+	if len(res) == 0 {
+		fmt.Println(ui.Dim("No account changes to follow."))
+	}
+	for _, r := range res {
+		if r.OK {
+			ui.OK(r.Remote + ": " + r.Message)
+		} else {
+			fmt.Println(ui.Yellow("! ") + r.Remote + ": " + r.Message)
+		}
+	}
 }
 
 func cmdDoctor(args []string) {

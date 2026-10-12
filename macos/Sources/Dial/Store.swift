@@ -24,8 +24,21 @@ final class Store: ObservableObject {
 
     private var timer: Timer?
     private var keepAliveTimer: Timer?
+    private var watcher: FileWatcher?
 
     func start() {
+        // Account changes made outside dial (Claude Desktop sign-in, `codex
+        // login`, `/login`) make remotes follow within seconds.
+        let env = ProcessInfo.processInfo.environment
+        let home = NSHomeDirectory()
+        let codexHome = env["CODEX_HOME"] ?? "\(home)/.codex"
+        let claudeData = env["DIAL_CLAUDE_DESKTOP_DATA"] ?? "\(home)/Library/Application Support/Claude"
+        watcher = FileWatcher(paths: ["\(codexHome)/auth.json", "\(claudeData)/config.json"], debounce: 2) { [weak self] in
+            Task { @MainActor in
+                _ = try? await DialClient.run(["follow", "--json"], timeout: 60)
+                await self?.load(refresh: false)
+            }
+        }
         Task { await load(refresh: false); await load(refresh: true) }
         schedule()
         keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in

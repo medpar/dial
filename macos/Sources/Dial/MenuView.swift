@@ -151,6 +151,12 @@ struct MenuView: View {
 
 struct RemoteLine: View {
     var r: RemoteStatus
+
+    /// Extracts the suggested `dial …` command from a sync message.
+    static func command(in message: String?) -> [String]? {
+        guard let m = message, let a = m.range(of: "`dial "), let b = m[a.upperBound...].firstIndex(of: "`") else { return nil }
+        return m[a.upperBound..<b].split(separator: " ").map(String.init)
+    }
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "server.rack").font(.system(size: 10)).foregroundStyle(.secondary)
@@ -167,6 +173,11 @@ struct RemoteLine: View {
                 .help(s.message ?? "")
             }
             Spacer(minLength: 0)
+            if let fix = results.compactMap({ $0.ok ? nil : RemoteLine.command(in: $0.message) }).first {
+                Button("Set up…") { DialClient.openInTerminal(fix, title: "dial-remote-seed") }
+                    .buttonStyle(.link).font(.system(size: 11))
+                    .help("Give \(r.name) its own login for this account (one browser sign-in)")
+            }
         }
     }
 }

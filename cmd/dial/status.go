@@ -62,6 +62,9 @@ func buildStatus(c *core.Core, refresh bool, force bool, only vault.Provider) St
 	st := Status{Version: version, Host: host, GeneratedAt: time.Now().UTC()}
 	c.SyncCodexWindows()
 	ctx := context.Background()
+	if refresh || force {
+		c.FollowExternalChanges(ctx)
+	}
 	st.Desktop.Claude = c.ClaudeDesktopStatus()
 	st.Desktop.Codex = c.CodexDesktopStatus()
 	desk := map[string]core.DesktopAccount{}

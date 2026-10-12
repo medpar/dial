@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/medpar/dial/internal/core"
@@ -47,6 +48,13 @@ func cmdUse(args []string) {
 func switchTo(c *core.Core, p vault.Profile, o opts) UseResult {
 	ctx := context.Background()
 	res := UseResult{Provider: string(p.Provider), Profile: p.ID, Label: p.Display(), OK: true}
+	// Never put a login that is known to be dead into the live location.
+	if r, ok := usage.LoadCache().Get(string(p.Provider) + ":" + p.ID); ok && !o.has("force") &&
+		strings.Contains(r.Error, "login expired") && len(r.Windows) == 0 {
+		res.OK = false
+		res.CLI = fmt.Sprintf("%s's login has expired; renew it with `dial login %s:%s` (or pass --force)", p.Display(), p.Provider, p.ID)
+		return res
+	}
 	onlyCLI, onlyDesktop := o.has("cli"), o.has("desktop", "app")
 	doCLI := !onlyDesktop
 	doDesktop := !onlyCLI && c.Config.SwitchDesktop
@@ -122,6 +130,8 @@ func switchTo(c *core.Core, p vault.Profile, o opts) UseResult {
 	if res.CLI == "ok" && !o.has("no-remote", "local") {
 		res.Remotes = c.SyncRemotes(ctx, p)
 	}
+	// Record what is live now so `dial follow` does not replay this switch.
+	c.FollowExternalChanges(ctx)
 	res.Warnings = c.Warnings
 	return res
 }

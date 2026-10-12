@@ -49,6 +49,7 @@ MORE
   dial watch [--interval 60]    live status view
   dial waybar                   JSON for waybar/polybar
   dial keepalive                refresh idle logins before they expire
+  dial follow                   make remotes follow account changes made outside dial
   dial doctor                   check setup
   dial config [key [value]]
   dial version
@@ -113,6 +114,8 @@ func main() {
 		cmdWaybar(rest)
 	case "keepalive", "refresh":
 		cmdKeepAlive(rest)
+	case "follow":
+		cmdFollow(rest)
 	case "doctor":
 		cmdDoctor(rest)
 	case "config":
