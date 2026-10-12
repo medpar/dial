@@ -175,7 +175,8 @@ func (c *Core) claudeUsage(ctx context.Context, p vault.Profile, li liveInfo, pr
 // updates the live store when p is live (no CLI is running then).
 func (c *Core) refreshClaude(ctx context.Context, p vault.Profile, isLive bool, prev usage.Report, force bool) error {
 	if prev.RefreshTriedAt != nil && time.Since(*prev.RefreshTriedAt) < minRefreshGap && prev.Error != "" {
-		return errors.New("token expired; refresh recently failed, retrying later")
+		// Keep the last verdict (e.g. "login expired") while backing off.
+		return &refreshError{errors.New(prev.Error)}
 	}
 	l, err := c.Lock()
 	if err != nil {
@@ -268,7 +269,8 @@ func isUnauthorized(err error) bool {
 
 func (c *Core) refreshCodex(ctx context.Context, p vault.Profile, isLive bool, prev usage.Report) error {
 	if prev.RefreshTriedAt != nil && time.Since(*prev.RefreshTriedAt) < minRefreshGap && prev.Error != "" {
-		return errors.New("token expired; refresh recently failed, retrying later")
+		// Keep the last verdict (e.g. "login expired") while backing off.
+		return &refreshError{errors.New(prev.Error)}
 	}
 	l, err := c.Lock()
 	if err != nil {
