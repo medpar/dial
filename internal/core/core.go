@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/medpar/dial/internal/claude"
 	"github.com/medpar/dial/internal/codex"
+	"github.com/medpar/dial/internal/fsutil"
 	"github.com/medpar/dial/internal/lock"
 	"github.com/medpar/dial/internal/paths"
 	"github.com/medpar/dial/internal/procs"
@@ -109,7 +111,11 @@ func (c *Core) ImportClaude(ctx context.Context, t claude.Target, label, origin 
 		rawAcct = claude.AccountFromProfile(prof)
 		acct = claude.ParseAccount(rawAcct)
 	}
-	return c.storeClaude(o, rawAcct, acct, label, origin, "")
+	p, created, err := c.storeClaude(o, rawAcct, acct, label, origin, "")
+	if err == nil {
+		p = c.enrichClaude(ctx, p, o)
+	}
+	return p, created, err
 }
 
 func (c *Core) storeClaude(o *claude.OAuth, rawAcct []byte, acct claude.Account, label, origin, lineage string) (vault.Profile, bool, error) {
@@ -321,7 +327,11 @@ func (c *Core) UseCodex(p vault.Profile, home string) error {
 		return fmt.Errorf("profile %s has no usable login; run `dial login codex:%s`", p.ID, p.ID)
 	}
 	c.SyncBackCodex(home)
-	return a.Save(filepath.Join(home, codex.AuthFile))
+	if err := a.Save(filepath.Join(home, codex.AuthFile)); err != nil {
+		return err
+	}
+	c.restartCodexDaemon(home)
+	return nil
 }
 
 // ------------------------------------------------------------ live state
@@ -379,4 +389,51 @@ func (c *Core) Use(ctx context.Context, prof vault.Profile) error {
 		s.Active[string(prof.Provider)] = prof.ID
 		s.Switched[string(prof.Provider)] = time.Now().UTC()
 	})
+}
+
+// restartCodexDaemon stops the managed app-server daemon of home so the next
+// codex invocation starts a fresh one with the new auth.json. It leaves the
+// daemon alone (and warns) while interactive codex sessions are running.
+func (c *Core) restartCodexDaemon(home string) {
+	var info struct {
+		PID int `json:"pid"`
+	}
+	if fsutil.ReadJSON(filepath.Join(home, "app-server-daemon", "daemon.pid"), &info) != nil || info.PID <= 0 {
+		return
+	}
+	if syscall.Kill(info.PID, 0) != nil {
+		return
+	}
+	sessions := 0
+	for _, p := range procs.CodexCLIs(procs.List()) {
+		if !strings.Contains(p.Args, "app-server") && !strings.Contains(p.Args, ".app/Contents/") {
+			sessions++
+		}
+	}
+	if sessions > 0 {
+		c.warn("%d codex session(s) running keep the previous account until restarted", sessions)
+		return
+	}
+	_ = syscall.Kill(info.PID, syscall.SIGTERM)
+}
+
+// enrichClaude fills a missing plan from /api/oauth/profile (older
+// credentials lack subscriptionType).
+func (c *Core) enrichClaude(ctx context.Context, p vault.Profile, o *claude.OAuth) vault.Profile {
+	if p.Plan != "" || o == nil || o.AccessExpired() {
+		return p
+	}
+	prof, err := claude.FetchProfile(ctx, o)
+	if err != nil {
+		return p
+	}
+	p.Plan = ClaudePlan(strings.TrimPrefix(prof.Organization.OrganizationType, "claude_"), prof.Organization.RateLimitTier)
+	if p.Tier == "" {
+		p.Tier = prof.Organization.RateLimitTier
+	}
+	if p.OrgName == "" {
+		p.OrgName = prof.Organization.Name
+	}
+	_ = c.Vault.Save(p)
+	return p
 }

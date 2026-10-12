@@ -119,7 +119,11 @@ func (c *Core) importFreshClaude(ctx context.Context, t claude.Target, label str
 		raw = claude.AccountFromProfile(prof)
 		acct = claude.ParseAccount(raw)
 	}
-	return c.storeClaude(o, raw, acct, label, "login", NewLineage())
+	p, created, err := c.storeClaude(o, raw, acct, label, "login", NewLineage())
+	if err == nil {
+		p = c.enrichClaude(ctx, p, o)
+	}
+	return p, created, err
 }
 
 // Mint performs an isolated login and returns the credentials without

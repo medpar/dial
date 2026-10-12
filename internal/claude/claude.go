@@ -30,11 +30,15 @@ import (
 	"github.com/medpar/dial/internal/usage"
 )
 
-const (
-	ClientID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+// Endpoints are variables so tests can point them at a local server.
+var (
 	TokenURL   = "https://platform.claude.com/v1/oauth/token"
 	UsageURL   = "https://api.anthropic.com/api/oauth/usage"
 	ProfileURL = "https://api.anthropic.com/api/oauth/profile"
+)
+
+const (
+	ClientID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 	BetaHeader = "oauth-2025-04-20"
 	userAgent  = "claude-cli/2.1.274 (external, cli)"
 

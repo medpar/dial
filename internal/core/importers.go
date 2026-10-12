@@ -147,7 +147,7 @@ func (c *Core) ImportCPS(ctx context.Context, disable bool) []ImportResult {
 			src += " (" + l + ")"
 		}
 		if err != nil {
-			results = append(results, ImportResult{Source: src, Err: fmt.Errorf("could not export (it may be at its usage limit); log in with `dial add codex` instead")})
+			results = append(results, ImportResult{Source: src, Err: fmt.Errorf("skipped: codex-profile-switcher will not export a profile at its usage limit (if it is your current login, it was imported from ~/.codex)")})
 			continue
 		}
 		var lease struct {

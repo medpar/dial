@@ -77,14 +77,15 @@ func cmdImport(args []string) {
 	c := core.New()
 	ctx := context.Background()
 	var results []core.ImportResult
-	if src == "all" || src == "live" || src == "current" {
-		results = append(results, c.ImportLive(ctx)...)
-	}
+	// Named sources first so their labels win over email-derived ones.
 	if src == "all" || src == "codex-auth" {
 		results = append(results, c.ImportCodexAuthTool()...)
 	}
-	if src == "all" || src == "cps" || src == "codex-profile-switcher" {
+	if src == "cps" || src == "codex-profile-switcher" || (src == "all" && o.has("cps")) {
 		results = append(results, c.ImportCPS(ctx, o.has("disable-cps"))...)
+	}
+	if src == "all" || src == "live" || src == "current" {
+		results = append(results, c.ImportLive(ctx)...)
 	}
 	if o.has("json") {
 		printJSON(results)

@@ -143,7 +143,7 @@ func (c *Core) claudeUsage(ctx context.Context, p vault.Profile, li liveInfo, pr
 		if isLive && li.claudeCLIBusy {
 			return usage.Report{}, errors.New("token expired; the running claude CLI will refresh it")
 		}
-		if err := c.refreshClaude(ctx, p, isLive, prev); err != nil {
+		if err := c.refreshClaude(ctx, p, isLive, prev, false); err != nil {
 			return usage.Report{}, err
 		}
 		cr, err = c.LoadClaude(p)
@@ -153,6 +153,17 @@ func (c *Core) claudeUsage(ctx context.Context, p vault.Profile, li liveInfo, pr
 		o = cr.OAuth
 	}
 	rep, err := claude.FetchUsage(ctx, o)
+	if isUnauthorized(err) && !(isLive && li.claudeCLIBusy) {
+		// Revoked before expiry (rotated elsewhere): one refresh, one retry.
+		if rerr := c.refreshClaude(ctx, p, isLive, prev, true); rerr != nil {
+			return rep, fmt.Errorf("login expired; run `dial login claude:%s` (%v)", p.ID, rerr)
+		}
+		if cr, err = c.LoadClaude(p); err != nil {
+			return rep, err
+		}
+		o = cr.OAuth
+		rep, err = claude.FetchUsage(ctx, o)
+	}
 	if err != nil {
 		return rep, err
 	}
@@ -162,7 +173,7 @@ func (c *Core) claudeUsage(ctx context.Context, p vault.Profile, li liveInfo, pr
 
 // refreshClaude refreshes p under the lock with compare-and-swap, and also
 // updates the live store when p is live (no CLI is running then).
-func (c *Core) refreshClaude(ctx context.Context, p vault.Profile, isLive bool, prev usage.Report) error {
+func (c *Core) refreshClaude(ctx context.Context, p vault.Profile, isLive bool, prev usage.Report, force bool) error {
 	if prev.RefreshTriedAt != nil && time.Since(*prev.RefreshTriedAt) < minRefreshGap && prev.Error != "" {
 		return errors.New("token expired; refresh recently failed, retrying later")
 	}
@@ -175,7 +186,7 @@ func (c *Core) refreshClaude(ctx context.Context, p vault.Profile, isLive bool, 
 	if err != nil {
 		return err
 	}
-	if !cr.OAuth.AccessExpired() {
+	if !force && !cr.OAuth.AccessExpired() {
 		return nil // someone else refreshed while we waited
 	}
 	before := string(cr.OAuth.JSON())
@@ -226,7 +237,22 @@ func (c *Core) codexUsage(ctx context.Context, p vault.Profile, li liveInfo, pre
 			return usage.Report{}, err
 		}
 	}
-	return codex.FetchUsage(ctx, a)
+	rep, err := codex.FetchUsage(ctx, a)
+	if isUnauthorized(err) && !(isLive && li.codexCLIBusy) {
+		if rerr := c.refreshCodex(ctx, p, isLive, prev); rerr != nil {
+			return rep, fmt.Errorf("login expired; run `dial login codex:%s` (%v)", p.ID, rerr)
+		}
+		if a, err = c.LoadCodex(p); err != nil {
+			return rep, err
+		}
+		rep, err = codex.FetchUsage(ctx, a)
+	}
+	return rep, err
+}
+
+func isUnauthorized(err error) bool {
+	var se *httpx.StatusError
+	return errors.As(err, &se) && se.Status == 401
 }
 
 func (c *Core) refreshCodex(ctx context.Context, p vault.Profile, isLive bool, prev usage.Report) error {
@@ -299,7 +325,7 @@ func (c *Core) KeepAlive(ctx context.Context) []string {
 			if !cr.OAuth.AccessExpired() {
 				continue
 			}
-			if c.refreshClaude(ctx, p, false, usage.Report{}) == nil {
+			if c.refreshClaude(ctx, p, false, usage.Report{}, false) == nil {
 				done = append(done, "claude:"+p.ID)
 			}
 		}

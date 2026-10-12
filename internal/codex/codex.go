@@ -19,10 +19,14 @@ import (
 	"github.com/medpar/dial/internal/usage"
 )
 
+// Endpoints are variables so tests can point them at a local server.
+var (
+	TokenURL = "https://auth.openai.com/oauth/token"
+	UsageURL = "https://chatgpt.com/backend-api/wham/usage"
+)
+
 const (
 	ClientID   = "app_EMoamEEZ73f0CkXaXp7hrann"
-	TokenURL   = "https://auth.openai.com/oauth/token"
-	UsageURL   = "https://chatgpt.com/backend-api/wham/usage"
 	AuthFile   = "auth.json"
 	authClaim  = "https://api.openai.com/auth"
 	userAgent  = "codex_cli_rs/0.160.0 (dial)"
