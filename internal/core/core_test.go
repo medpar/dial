@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/medpar/dial/internal/claude"
 	"github.com/medpar/dial/internal/codex"
 	"github.com/medpar/dial/internal/state"
+	"github.com/medpar/dial/internal/usage"
 	"github.com/medpar/dial/internal/vault"
 )
 
@@ -207,5 +209,17 @@ func TestCodexUsageRefreshOn401(t *testing.T) {
 	a, _ := c.LoadCodex(p)
 	if a.Tokens().RefreshToken != "r2" {
 		t.Fatalf("refreshed token not persisted")
+	}
+}
+
+func TestApplyRefusesExpiredLogin(t *testing.T) {
+	c := newTestCore(t)
+	p, _, _ := c.ImportCodexAuth(codexAuth("u1", "a1", "x@y.z", "r1", time.Now()), "w", "test", "")
+	cache := usage.LoadCache()
+	cache.Put("codex:"+p.ID, usage.Report{FetchedAt: time.Now(), Error: "login expired; run `dial login codex:w`"})
+	cache.Save()
+	resp := c.Apply(context.Background(), ApplyRequest{Provider: vault.Codex, Key: p.Key(), Label: "w", Activate: true})
+	if resp.OK || !resp.Missing || !strings.Contains(resp.Message, "expired") {
+		t.Fatalf("expired login was activated: %+v", resp)
 	}
 }

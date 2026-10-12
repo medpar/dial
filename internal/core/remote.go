@@ -14,6 +14,7 @@ import (
 	"github.com/medpar/dial/internal/codex"
 	"github.com/medpar/dial/internal/remote"
 	"github.com/medpar/dial/internal/state"
+	"github.com/medpar/dial/internal/usage"
 	"github.com/medpar/dial/internal/vault"
 )
 
@@ -107,6 +108,13 @@ func (c *Core) Apply(ctx context.Context, req ApplyRequest) ApplyResponse {
 	}
 	if !ok {
 		return ApplyResponse{Missing: true, Message: fmt.Sprintf("no %s login for %s on this host", req.Provider, req.Label)}
+	}
+	// Never activate a login this host already knows is dead; report it as
+	// missing so the caller offers to seed a fresh one.
+	if req.Activate && req.Push == nil {
+		if r, cached := usage.LoadCache().Get(string(p.Provider) + ":" + p.ID); cached && len(r.Windows) == 0 && strings.Contains(r.Error, "login expired") {
+			return ApplyResponse{Missing: true, ProfileID: p.ID, Message: fmt.Sprintf("%s login for %s has expired on this host", req.Provider, req.Label)}
+		}
 	}
 	if req.Activate {
 		if err := c.Use(ctx, p); err != nil {
@@ -234,7 +242,11 @@ func (c *Core) SyncRemotes(ctx context.Context, p vault.Profile) []state.SyncRes
 			case err != nil:
 				res.Message = err.Error()
 			case resp.Missing:
-				res.Message = fmt.Sprintf("%s has no login for %s; run `dial remote seed %s %s:%s`", r.Name, p.Display(), r.Name, p.Provider, p.ID)
+				what := "has no login"
+				if strings.Contains(resp.Message, "expired") {
+					what = "has an expired login"
+				}
+				res.Message = fmt.Sprintf("%s %s for %s; run `dial remote seed %s %s:%s`", r.Name, what, p.Display(), r.Name, p.Provider, p.ID)
 			case !resp.OK:
 				res.Message = resp.Message
 			default:
