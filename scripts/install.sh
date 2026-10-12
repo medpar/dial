@@ -61,7 +61,7 @@ else
   if [ -z "${DIAL_NO_CRON:-}" ] && command -v crontab >/dev/null 2>&1; then
     line="17 */6 * * * $BIN_DIR/dial keepalive >/dev/null 2>&1"
     if ! crontab -l 2>/dev/null | grep -q "dial keepalive"; then
-      (crontab -l 2>/dev/null; echo "$line") | crontab -
+      { crontab -l 2>/dev/null || true; echo "$line"; } | crontab -
       echo "✓ keepalive cron added (refreshes idle logins every 6h)"
     fi
   fi
