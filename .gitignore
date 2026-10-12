@@ -1,0 +1,7 @@
+/bin/
+/dist/
+/build/
+*.app
+.DS_Store
+macos/.build/
+macos/.swiftpm/
