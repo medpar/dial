@@ -13,6 +13,7 @@ if args.contains("--restore-dock") {
     exit(0)
 }
 if args.contains("--make-launchers") {
+    Launchers.monogram = args.contains("--monogram")
     let made = Launchers.makeAll(pin: args.contains("--pin") || args.contains("--replace"), replace: args.contains("--replace"))
     print(made.isEmpty ? "No desktop accounts to make Dock icons for." : "Dock icons are in \(Launchers.folder.path)")
     exit(0)

@@ -49,6 +49,31 @@ enum Launchers {
         return p.id
     }
 
+    /// Launchers wear the real app's icon unless `monogram` is set, so the
+    /// Dock looks the same and only the hover name tells accounts apart.
+    static var monogram = false
+
+    static func appURL(for provider: String) -> URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: provider == "claude" ? "com.anthropic.claudefordesktop" : "com.openai.codex")
+    }
+
+    /// Renders the real app's icon (whatever the bundle uses: icns or an
+    /// asset catalog) at px×px.
+    static func renderOriginal(_ s: Spec, px: Int) -> Data? {
+        guard let app = appURL(for: s.provider) else { return nil }
+        let icon = NSWorkspace.shared.icon(forFile: app.path)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        NSGraphicsContext.current = ctx
+        ctx.imageInterpolation = .high
+        icon.draw(in: NSRect(x: 0, y: 0, width: px, height: px), from: .zero, operation: .copy, fraction: 1)
+        return rep.representation(using: .png, properties: [:])
+    }
+
     @discardableResult
     static func makeAll(pin: Bool, replace: Bool = false, log: (String) -> Void = { print($0) }) -> [URL] {
         let fm = FileManager.default
@@ -176,7 +201,7 @@ enum Launchers {
         defer { try? fm.removeItem(at: tmp) }
         for (name, px) in [("16x16", 16), ("16x16@2x", 32), ("32x32", 32), ("32x32@2x", 64), ("128x128", 128),
                            ("128x128@2x", 256), ("256x256", 256), ("256x256@2x", 512), ("512x512", 512), ("512x512@2x", 1024)] {
-            if let png = render(s, px: px) {
+            if let png = monogram ? render(s, px: px) : (renderOriginal(s, px: px) ?? render(s, px: px)) {
                 try png.write(to: tmp.appendingPathComponent("icon_\(name).png"))
             }
         }

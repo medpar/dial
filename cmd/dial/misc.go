@@ -166,6 +166,9 @@ func cmdDock(args []string) {
 	if o.has("replace") && a[0] != "--restore-dock" {
 		a = append(a, "--replace")
 	}
+	if o.has("monogram") && a[0] != "--restore-dock" {
+		a = append(a, "--monogram")
+	}
 	cmd := exec.Command(app, a...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	die(cmd.Run())
