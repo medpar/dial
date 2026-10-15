@@ -159,6 +159,10 @@ func (t Target) KeychainService() string {
 	return "Claude Code-credentials-" + hex.EncodeToString(sum[:])[:8]
 }
 
+// useKeychain reports whether credentials live in the macOS keychain.
+// DIAL_CLAUDE_STORE=file forces the Linux-style file store (tests).
+func useKeychain() bool { return keychain.Available() && os.Getenv("DIAL_CLAUDE_STORE") != "file" }
+
 func (t Target) credentialsFile() string { return filepath.Join(t.ConfigDir, ".credentials.json") }
 
 var userRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
@@ -179,7 +183,7 @@ func keychainAccount() string {
 // readStore returns the whole credential store JSON for t.
 func (t Target) readStore() (map[string]json.RawMessage, error) {
 	store := map[string]json.RawMessage{}
-	if keychain.Available() {
+	if useKeychain() {
 		data, err := keychain.Get(t.KeychainService(), keychainAccount())
 		if errors.Is(err, keychain.ErrNotFound) {
 			return store, nil
@@ -207,7 +211,7 @@ func (t Target) writeStore(store map[string]json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if keychain.Available() {
+	if useKeychain() {
 		return keychain.Set(t.KeychainService(), keychainAccount(), data)
 	}
 	return fsutil.WriteFileAtomic(t.credentialsFile(), data, 0o600)

@@ -52,6 +52,21 @@ dial follows these rules:
   - `dial remote seed` runs the provider's login in a throwaway home on the laptop and pushes the result to the remote as the remote's own family.
   - After that, a switch sends only the account key.
 
+## Identity of a live Claude login
+
+Claude Code keeps the login (keychain item or `.credentials.json`) apart from the account it belongs to (`oauthAccount` in `.claude.json`). Claude Desktop's built-in Claude Code rewrites `~/.claude.json` from every window with that window's account. Trusting it once led dial to:
+
+- treat the CLI's real login as idle and refresh its stored copy, which revoked the keychain copy, after which Claude Code blanked the login; and
+- attribute a login to the wrong profile.
+
+Identity is now derived from the credential itself:
+
+1. an exact token match with a stored profile; else
+2. `GET /api/oauth/profile` with the access token, cached in `~/.dial/identity.json` until the token expires; else
+3. unknown.
+
+An unknown login is never synced back and never refreshed by dial. Liveness ("is this profile the CLI's login?") uses the same identity, so dial never rotates a token family the keychain also holds without writing the result back.
+
 ## Claude Code specifics
 
 - **macOS keychain item:** service `Claude Code-credentials` for the default config dir, or `Claude Code-credentials-<sha256(CLAUDE_CONFIG_DIR)[:8]>` for a custom one. The account is `$USER`.
@@ -100,6 +115,17 @@ Moves are renames on the same volume, so they are instant. A failure rolls back.
 5. Relaunches the instances that were open, plus the new account's window.
 
 dial never logs out, because logging out would revoke the saved session server-side.
+
+**Launching.**
+
+- Instances are always started with `open -n`. A plain `open -a` merely focuses whichever instance of the bundle already runs, which is how a relaunched main window used to come back as another account's window.
+- An instance whose data dir already has a process is focused, never launched twice. Claude Desktop takes no single-instance lock, and two processes on one data dir fight over its cookie and LevelDB stores.
+- The main window is started before other windows (`desktop_main_first`), because the Dock binds its pinned Claude icon to the first instance it sees.
+- Focusing targets one exact process: Dial.app runs `NSRunningApplication.activate` (`Dial --activate-pid`), with System Events as the fallback.
+
+**Dock launchers.** `dial dock` makes `~/Applications/Dial/<Provider> · <account>.app`, one per account. Each is a copy of a tiny template app (`Contents/Helpers/DialLauncher.app`) with its own Info.plist target and a generated icon, ad-hoc signed. On click it asks `dial desktop where`, activates that pid or runs `dial desktop show`, then quits. `--replace` swaps the generic Claude/ChatGPT Dock items for the launchers (via `CFPreferences` on `com.apple.dock`).
+
+**Switch semantics.** A CLI switch never moves accounts between windows. `dial use --show` brings the account's own window forward; only `dial desktop use` swaps the main window's account.
 
 **Detection is by content.** Each running instance's account is read from its own `config.json`, never inferred from the directory name. Idle homes whose content no longer matches their name, for example because someone signed a different account into a window, are renamed to match.
 

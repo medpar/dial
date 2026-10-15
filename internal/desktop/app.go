@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -259,18 +260,22 @@ func (a App) Quit(dataDir string, timeout time.Duration) error {
 	return fmt.Errorf("%s did not quit within %s; close it and retry", a.Name, timeout)
 }
 
-// Launch starts the instance using dataDir. env is passed to the app
-// process via `open --env`.
+// Launch starts the instance using dataDir, or brings it to the front when
+// it already runs. Claude Desktop takes no single-instance lock, so a second
+// process on the same data dir would fight over its cookie and LevelDB
+// stores; that never happens. `open -n` is always used because a plain
+// `open -a` just focuses whichever instance of the app is already running,
+// which is how the main window used to fail to come back.
 func (a App) Launch(dataDir string, env map[string]string) error {
+	if pids := a.PIDs(procs.List(), dataDir); len(pids) > 0 {
+		return Activate(pids[0])
+	}
 	path, err := a.Path()
 	if err != nil {
 		return err
 	}
-	args := []string{}
 	isDefault := samePath(dataDir, a.DataDir()) && !a.overridden()
-	if !isDefault {
-		args = append(args, "-n")
-	}
+	args := []string{"-n"}
 	for k, v := range env {
 		args = append(args, "--env", k+"="+v)
 	}
@@ -285,12 +290,65 @@ func (a App) Launch(dataDir string, env map[string]string) error {
 	return nil
 }
 
+// WaitRunning polls until the instance using dataDir is up.
+func (a App) WaitRunning(dataDir string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if a.Running(dataDir) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 // Focus brings the instance using dataDir to the front.
 func (a App) Focus(dataDir string) error {
 	pids := a.PIDs(procs.List(), dataDir)
 	if len(pids) == 0 {
 		return errors.New("not running")
 	}
-	script := fmt.Sprintf(`tell application "System Events" to set frontmost of (first process whose unix id is %d) to true`, pids[0])
+	return Activate(pids[0])
+}
+
+// PID returns the main process of the instance using dataDir, or 0.
+func (a App) PID(dataDir string) int {
+	if pids := a.PIDs(procs.List(), dataDir); len(pids) > 0 {
+		return pids[0]
+	}
+	return 0
+}
+
+// dialApp finds Dial.app's executable, which can activate a specific
+// process natively (no Automation permission needed).
+func dialApp() string {
+	var cands []string
+	if exe, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			// …/Dial.app/Contents/Helpers/dial → …/Dial.app/Contents/MacOS/Dial
+			cands = append(cands, filepath.Join(filepath.Dir(filepath.Dir(real)), "MacOS", "Dial"))
+		}
+	}
+	cands = append(cands, "/Applications/Dial.app/Contents/MacOS/Dial", filepath.Join(paths.Home(), "Applications", "Dial.app", "Contents", "MacOS", "Dial"))
+	for _, c := range cands {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c
+		}
+	}
+	return ""
+}
+
+// Activate brings process pid to the front: one specific instance, even
+// when several of the same app run.
+func Activate(pid int) error {
+	if helper := dialApp(); helper != "" {
+		cmd := exec.Command(helper, "--activate-pid", strconv.Itoa(pid))
+		if cmd.Run() == nil {
+			return nil
+		}
+	}
+	script := fmt.Sprintf(`tell application "System Events" to set frontmost of (first process whose unix id is %d) to true`, pid)
 	return exec.Command("osascript", "-e", script).Run()
 }

@@ -10,6 +10,13 @@ let package = Package(
             path: "Sources/Dial",
             swiftSettings: [.unsafeFlags(["-Osize"])],
             linkerSettings: [.linkedFramework("Carbon")]
-        )
+        ),
+        // One tiny app per account in the Dock: focuses (or opens) that
+        // account's desktop window, then quits.
+        .executableTarget(
+            name: "DialLauncher",
+            path: "Sources/DialLauncher",
+            swiftSettings: [.unsafeFlags(["-Osize"])]
+        ),
     ]
 )

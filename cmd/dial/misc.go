@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -139,4 +140,30 @@ func cmdConfig(args []string) {
 	die(json.Unmarshal(b, &next))
 	die(state.SaveConfig(next))
 	ui.OK(fmt.Sprintf("%s = %s", key, o.pos[1]))
+}
+
+// cmdDock asks Dial.app to build one launcher app per desktop account in
+// ~/Applications/Dial, so each account gets its own stable Dock icon.
+func cmdDock(args []string) {
+	o := parse(args)
+	app := ""
+	for _, cand := range []string{"/Applications/Dial.app/Contents/MacOS/Dial", paths.Home() + "/Applications/Dial.app/Contents/MacOS/Dial"} {
+		if _, err := os.Stat(cand); err == nil {
+			app = cand
+			break
+		}
+	}
+	if app == "" {
+		dief("Dial.app is not installed; dock launchers need it")
+	}
+	a := []string{"--make-launchers"}
+	if o.has("pin") {
+		a = append(a, "--pin")
+	}
+	if o.has("replace") {
+		a = append(a, "--replace")
+	}
+	cmd := exec.Command(app, a...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	die(cmd.Run())
 }

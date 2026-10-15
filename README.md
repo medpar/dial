@@ -15,7 +15,7 @@
 
 If you have more than one Claude or ChatGPT/Codex account (personal, work, team seats), you have probably juggled `/login`, copied `auth.json` files around, and lost track of which account has headroom left. dial stores each login once and switches between them without opening the browser again. It also runs several accounts side by side, keeps a remote dev box on the same account as your laptop, and puts all usage limits in one place.
 
-- **Instant switching.** `dial use work` swaps the Claude Code / Codex CLI login and the matching desktop app. Remote machines follow automatically.
+- **Instant switching.** `dial use work` swaps the Claude Code / Codex CLI login (and the Codex app) and can bring that account's desktop window forward. Remote machines follow automatically.
 - **No re-authentication.** Each account logs in once. dial keeps stored logins fresh and folds tokens refreshed by the CLIs back into its vault.
 - **Side by side.** Run several accounts at the same time: separate Claude Desktop and Codex Desktop windows (`dial open`) and isolated CLI sessions (`dial run`).
 - **Remote sync.** When you switch on your Mac, your VPS switches too, so Claude Code Remote Control and Codex sessions there run on the same account. It works over plain `ssh`. Account changes made outside dial (signing in inside Claude Desktop, `codex login`) are followed within seconds.
@@ -92,14 +92,18 @@ If the icon is hidden behind the notch, ⌘-drag it further right in the menu ba
 
 **Codex Desktop** reads the same `~/.codex/auth.json` as the CLI, so `dial use` switches both and restarts the app if it is open.
 
-**Claude Desktop** keeps its own sign-in. dial saves each account's sign-in, so you can switch the main window or run accounts side by side:
+**Claude Desktop** keeps its own sign-in. dial saves each account's sign-in and gives every account a stable place: one account lives in the main Claude window, the others in windows of their own.
 
 ```bash
 dial desktop add claude      # sign another account into Claude Desktop; it opens in its own window
-dial use personal            # switch the CLI and the main Claude window together
-dial desktop use work        # switch only the main window
-dial open personal           # open a saved account in its own window
+dial use personal --show     # CLI → personal, and bring its window forward (what clicking it in the menu does)
+dial show personal           # just bring its window forward (opens it if closed)
+dial desktop use work        # make work the main window's account (the only command that swaps it)
 ```
+
+A switch never moves accounts between windows behind your back. Clicking an account in the menu switches the CLI (and your remotes) and brings that account's own window forward. Swapping which account the main window holds is a separate, explicit action.
+
+**One Dock icon per account.** Several Claude windows all share the same Dock icon, so a pinned Claude icon opens whichever instance macOS saw first. **⋯ → Dock icons → Replace Claude & Codex with one icon per account** (or `dial dock --replace`) creates a small launcher per account in `~/Applications/Dial` and pins them instead. Each icon is labelled with its account and always focuses, or opens, that account's window. dial also starts the main window before any other window, so even the plain Claude icon stays on the main account.
 
 **How sign-in works.** Claude Desktop finishes a sign-in through a `claude://` link that only the window which started it accepts, and macOS delivers that link to just one running Claude window. When several were open, the sign-in often landed in the wrong one and was ignored. `dial desktop add` therefore:
 
@@ -158,9 +162,13 @@ dial remote status vps
 ```
 
 - **One source of truth per account.**
-  - The live CLI location (`~/.codex/auth.json`, or the `Claude Code-credentials` keychain item plus `oauthAccount` in `~/.claude.json`) only ever holds a copy of the active account.
+  - The live CLI location (`~/.codex/auth.json`, or the `Claude Code-credentials` keychain item) only ever holds a copy of the active account.
   - Before every switch, dial folds that copy back into the vault, keeping whichever is newer.
   - A login you created with `/login` behind dial's back is imported, never lost.
+- **Identity comes from the credential, not from config files.**
+  - Claude Desktop's built-in Claude Code rewrites `~/.claude.json` from every window with that window's account, so that file can't say whose login the keychain holds.
+  - dial matches the credential's tokens against its saved profiles, or asks the API who owns the access token. That answer is cached until the token expires.
+  - A login it can't identify is left alone.
 - **Never two refreshers.**
   - dial only refreshes accounts that aren't live anywhere: not in the CLI, not in an open window, not in a running `dial run`.
   - Refreshes use compare-and-swap and are rate-limited.
@@ -182,7 +190,8 @@ More detail is in [docs/DESIGN.md](docs/DESIGN.md).
 ```text
 dial                          status of every account (cached usage)
 dial status [--refresh]       … refreshing stale usage first
-dial use <account>            switch CLI + desktop app (+ remotes)   [--cli | --desktop] [--no-remote]
+dial use <account>            switch the CLI (+ Codex app, + remotes)  [--show] [--cli] [--no-remote]
+dial show <account>           bring an account's desktop window forward (opens it if closed)
 dial claude|codex <account>   shorthand for use
 dial next|best claude|codex   cycle, or pick the account with most headroom
 dial add claude|codex         log in a new account         [--label] [--email] [--sso] [--device]
@@ -190,7 +199,8 @@ dial login <account>          renew an account's login
 dial import [live|codex-auth|cps]
 dial ls | rename <account> <label> [--id] | rm <account>
 dial run <account> [-- args]  dial env <account>    dial open <account>
-dial desktop [add claude | login <account> | use <account>]
+dial desktop [add claude | login <account> | use <account> | where <account>]
+dial dock [--pin | --replace] one Dock icon per account
 dial remote add|ls|rm|status|seed|sync
 dial usage [account…]         dial watch            dial waybar
 dial keepalive                dial follow           dial doctor

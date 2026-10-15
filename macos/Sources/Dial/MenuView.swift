@@ -98,6 +98,11 @@ struct MenuView: View {
                     Button("Codex…") { DialClient.openInTerminal(["add", "codex"], title: "dial-add-codex") }
                 }
                 Button("Import current logins") { Task { _ = try? await DialClient.run(["import"]); await store.load(refresh: true) } }
+                Menu("Dock icons") {
+                    Button("Replace Claude & Codex with one icon per account") { store.makeDockIcons(pin: true, replace: true) }
+                    Button("Add one icon per account") { store.makeDockIcons(pin: true) }
+                    Button("Make icons, I'll drag them myself") { store.makeDockIcons(pin: false) }
+                }
                 Divider()
                 Picker("Refresh every", selection: Binding(get: { store.refreshMinutes }, set: { store.refreshMinutes = $0; store.schedule() })) {
                     ForEach([2, 5, 10, 15, 30], id: \.self) { Text("\($0) min").tag($0) }
@@ -206,6 +211,10 @@ struct ProviderSection: View {
                 }
                 .buttonStyle(.link).font(.system(size: 11)).padding(.horizontal, 4)
             }
+            if !ps.profiles.isEmpty && !ps.profiles.contains(where: \.active) {
+                Text("The \(ps.provider == "claude" ? "Claude" : "Codex") CLI is signed out — click an account to use it")
+                    .font(.system(size: 10.5)).foregroundStyle(.orange).padding(.horizontal, 4)
+            }
             ForEach(ps.profiles) { p in
                 AccountRow(store: store, provider: ps.provider, p: p, desktopInstalled: desktop.installed)
             }
@@ -260,8 +269,16 @@ struct AccountRow: View {
             if p.active { withAnimation(.snappy(duration: 0.2)) { expanded.toggle() } }
             else { Task { await store.use(provider, p) } }
         }
-        .help(p.active ? "Active — click for details" : "Click to switch \(provider == "claude" ? "Claude" : "Codex") to \(p.label)")
+        .help(p.active ? "In use by the CLI — click for details" : clickHelp)
         .contextMenu { menuItems }
+    }
+
+    private var clickHelp: String {
+        let app = provider == "claude" ? "Claude" : "Codex"
+        if provider == "claude" && p.desktop != nil {
+            return "Use \(p.label) in the CLI and bring its \(app) window forward"
+        }
+        return "Use \(p.label) for the \(app) CLI\(provider == "codex" ? " and app" : "")"
     }
 
     private var subtitle: String {
@@ -286,17 +303,19 @@ struct AccountRow: View {
 
     private var needsDesktopSignin: Bool { provider == "claude" && desktopInstalled && p.desktop == nil }
 
+    private var hasWindow: Bool { p.desktop == "live" || p.window == true }
+
     @ViewBuilder private var actions: some View {
         HStack(spacing: 2) {
             if needsDesktopSignin {
                 Button { DesktopSignin.start(account: "claude:\(p.id)", label: p.label) } label: { Image(systemName: "person.badge.plus") }
                     .buttonStyle(IconButtonStyle()).help("Sign \(p.label) in to Claude Desktop (opens in its own window)")
-            } else if desktopInstalled && p.desktop != "live" && p.window != true {
-                Button { Task { await store.openWindow(provider, p) } } label: { Image(systemName: "macwindow.badge.plus") }
-                    .buttonStyle(IconButtonStyle()).help("Open in its own \(provider == "claude" ? "Claude" : "Codex") window")
-            } else if p.window == true {
-                Button { Task { await store.openWindow(provider, p) } } label: { Image(systemName: "macwindow.on.rectangle") }
-                    .buttonStyle(IconButtonStyle()).help("Bring its window to the front")
+            } else if desktopInstalled && (provider == "claude" || hasWindow || p.desktop == "live") {
+                Button { Task { await store.focus(provider, p) } } label: { Image(systemName: hasWindow ? "macwindow" : "macwindow.badge.plus") }
+                    .buttonStyle(IconButtonStyle()).help(hasWindow ? "Bring its window to the front" : "Open in its own window")
+            } else if desktopInstalled {
+                Button { Task { await store.focus(provider, p) } } label: { Image(systemName: "macwindow.badge.plus") }
+                    .buttonStyle(IconButtonStyle()).help("Open in its own Codex window")
             }
             Button { DialClient.openInTerminal(["run", "\(provider):\(p.id)"], title: "dial-run-\(provider)-\(p.id)") } label: { Image(systemName: "terminal") }
                 .buttonStyle(IconButtonStyle()).help("Run \(provider) as \(p.label) in Terminal")
@@ -306,10 +325,21 @@ struct AccountRow: View {
     }
 
     @ViewBuilder private var menuItems: some View {
-        Button("Switch CLI + app") { Task { await store.use(provider, p) } }
-        Button("Switch CLI only") { Task { await store.use(provider, p, scope: "cli") } }
-        if desktopInstalled { Button("Switch desktop app only") { Task { await store.use(provider, p, scope: "desktop") } } }
-        if desktopInstalled { Button("Open in its own window") { Task { await store.openWindow(provider, p) } } }
+        if provider == "claude" {
+            Button("Use in CLI + bring window forward") { Task { await store.use(provider, p) } }
+            Button("Use in CLI only") { Task { await store.use(provider, p, flags: ["--cli"]) } }
+            if desktopInstalled && p.desktop != nil {
+                Button(hasWindow ? "Bring window forward" : "Open in its own window") { Task { await store.focus(provider, p) } }
+                if p.desktop != "live" && p.window != true {
+                    Button("Make it the main window's account") { Task { await store.makeMain(p) } }
+                }
+            }
+        } else {
+            Button("Use for Codex CLI + app") { Task { await store.use(provider, p) } }
+            if desktopInstalled && !p.active {
+                Button(p.window == true ? "Bring its window forward" : "Open in its own window") { Task { await store.focus(provider, p) } }
+            }
+        }
         Button("Run in Terminal") { DialClient.openInTerminal(["run", "\(provider):\(p.id)"], title: "dial-run-\(provider)-\(p.id)") }
         Divider()
         Button("Renew login…") { DialClient.openInTerminal(["login", "\(provider):\(p.id)"], title: "dial-login-\(p.id)") }
@@ -406,7 +436,10 @@ struct IconButtonStyle: ButtonStyle {
 /// for a moment: the sign-in callback only reaches the right window when it
 /// is the only one running.
 enum DesktopSignin {
+    static var closeMenu: (() -> Void)?
+
     static func start(account: String?, label: String?) {
+        closeMenu?()
         let alert = NSAlert()
         alert.messageText = label.map { "Sign \($0) in to Claude Desktop" } ?? "Add a Claude Desktop account"
         alert.informativeText = "Dial closes your Claude windows for a moment and opens one sign-in window, so the sign-in can't land in the wrong window. Running Claude Desktop agents pause. When you're signed in, your windows reopen and the account opens in its own window."

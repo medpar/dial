@@ -8,7 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var popover: NSPopover?
     private let store = Store()
     private var hotKey: HotKey?
-    private var monitor: Any?
+    private var outsideClicks: Any?
+    private var lastClosed = Date.distantPast
 
     func applicationDidFinishLaunching(_ note: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -17,9 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             b.imagePosition = .imageLeading
             b.target = self
             b.action = #selector(toggle(_:))
-            b.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            b.sendAction(on: [.leftMouseDown, .rightMouseDown])
         }
         store.onChange = { [weak self] in self?.updateIcon() }
+        store.closeMenu = { [weak self] in self?.close() }
+        DesktopSignin.closeMenu = { [weak self] in self?.close() }
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.close() }
+        }
         store.start()
         // ⌥⌘D toggles the menu from anywhere.
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in
@@ -60,18 +66,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     @objc private func toggle(_ sender: Any?) {
         if let p = popover, p.isShown {
-            p.performClose(sender)
+            close()
             return
         }
+        // A click on the icon first closes the open popover (transient
+        // behaviour), then arrives here: don't reopen it straight away.
+        if sender is NSStatusBarButton, Date().timeIntervalSince(lastClosed) < 0.3 { return }
         let p = popover ?? makePopover()
         popover = p
         guard let b = item.button else { return }
         Task { await store.load(refresh: false) }
+        NSApp.activate()
         p.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
         p.contentViewController?.view.window?.makeKey()
-        NSApp.activate(ignoringOtherApps: true)
+        // Transient popovers only close on outside clicks while Dial is the
+        // active app, which macOS doesn't always grant to menu bar apps.
+        // Watch clicks in every other app and close on any of them.
+        outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            Task { @MainActor in self?.close() }
+        }
         // Fetch anything older than the CLI's usage TTL (cheap when fresh).
         Task { await store.load(refresh: true) }
+    }
+
+    func close() {
+        popover?.performClose(nil)
+        if let m = outsideClicks {
+            NSEvent.removeMonitor(m)
+            outsideClicks = nil
+        }
     }
 
     private func makePopover() -> NSPopover {
@@ -87,6 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
+        lastClosed = Date()
+        if let m = outsideClicks {
+            NSEvent.removeMonitor(m)
+            outsideClicks = nil
+        }
         // Drop the SwiftUI tree while closed to keep the idle footprint small.
         popover = nil
     }

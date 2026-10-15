@@ -34,10 +34,13 @@ SIDE BY SIDE
   dial run <account> [-- args]  run claude/codex as <account> in this terminal
   dial env <account>            print exports for a shell (eval "$(dial env x)")
   dial open <account>           open a desktop window signed in as <account>
+  dial show <account>           bring an account's desktop window to the front
+  dial dock [--pin|--replace]   one Dock icon per account; --replace swaps out the generic
+                                Claude/Codex icons so each icon is exactly one account
   dial desktop                  desktop app status
   dial desktop add claude       sign another account into Claude Desktop (opens it in its own window)
   dial desktop login <account>  renew an account's Claude Desktop sign-in
-  dial desktop use <account>    switch only the desktop app
+  dial desktop use <account>    make <account> the main Claude window's account
 
 REMOTES
   dial remote add <name> <ssh-target> [--providers claude,codex] [--manual]
@@ -101,6 +104,10 @@ func main() {
 		cmdEnv(rest)
 	case "open", "window":
 		cmdOpen(rest)
+	case "show", "focus":
+		cmdDesktop(append([]string{"show"}, rest...))
+	case "dock":
+		cmdDock(rest)
 	case "desktop", "app":
 		cmdDesktop(rest)
 	case "remote", "remotes":

@@ -203,7 +203,7 @@ func (c *Core) refreshClaude(ctx context.Context, p vault.Profile, isLive bool, 
 	}
 	if isLive {
 		t := claude.DefaultTarget()
-		if lo, acct, err := c.LiveClaude(t); err == nil && acct.Key() == p.Key() && lo.RefreshToken() != cr.OAuth.RefreshToken() {
+		if lo, id, err := c.liveClaude(ctx, t); err == nil && id.Key == p.Key() && lo.RefreshToken() != cr.OAuth.RefreshToken() {
 			_ = t.WriteOAuth(cr.OAuth)
 		}
 	}

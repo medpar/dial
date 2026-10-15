@@ -72,14 +72,26 @@ enum DialClient {
         return try await decode(DialStatus.self, args)
     }
 
-    static func use(_ provider: String, _ id: String, scope: String? = nil) async throws -> UseResult {
-        var args = ["use", "\(provider):\(id)", "--json"]
-        if let scope { args.append("--\(scope)") }
-        return try await decode(UseResult.self, args, timeout: 120)
+    static func use(_ provider: String, _ id: String, flags: [String] = []) async throws -> UseResult {
+        try await decode(UseResult.self, ["use", "\(provider):\(id)", "--json"] + flags, timeout: 120)
     }
 
     static func open(_ provider: String, _ id: String) async throws -> SimpleResult {
         try await decode(SimpleResult.self, ["open", "\(provider):\(id)", "--json"])
+    }
+
+    struct Where: Decodable {
+        var kind: String
+        var running: Bool
+        var pid: Int32?
+    }
+
+    static func whereIs(_ provider: String, _ id: String) async throws -> Where {
+        try await decode(Where.self, ["desktop", "where", "\(provider):\(id)", "--json"])
+    }
+
+    static func show(_ provider: String, _ id: String) async throws -> SimpleResult {
+        try await decode(SimpleResult.self, ["desktop", "show", "\(provider):\(id)", "--json"], timeout: 60)
     }
 
     /// Opens Terminal running `dial <args>` (no Automation permission needed:

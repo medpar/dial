@@ -316,6 +316,38 @@ func cmdDesktop(args []string) {
 			return
 		}
 		reportUse(res)
+	case "where":
+		if len(o.pos) < 2 {
+			dief("usage: dial desktop where <account> [--json]")
+		}
+		p, err := c.Vault.Resolve(o.pos[1], "")
+		die(err)
+		w := c.WhereDesktop(p)
+		if o.has("json") {
+			printJSON(w)
+			return
+		}
+		fmt.Printf("%s:%s %s", p.Provider, p.ID, w.Kind)
+		if w.Running {
+			fmt.Printf(" (pid %d)", w.PID)
+		}
+		fmt.Println()
+	case "show":
+		if len(o.pos) < 2 {
+			dief("usage: dial desktop show <account>")
+		}
+		p, err := c.Vault.Resolve(o.pos[1], "")
+		die(err)
+		w, err := c.ShowDesktop(p)
+		if o.has("json") {
+			msg := "ok"
+			if err != nil {
+				msg = err.Error()
+			}
+			printJSON(map[string]any{"ok": err == nil, "message": msg, "where": w})
+			return
+		}
+		die(err)
 	case "accounts":
 		printJSON(desktop.ParkedClaude())
 	default:

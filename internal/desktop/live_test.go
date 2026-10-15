@@ -31,3 +31,26 @@ func TestLiveClaudeInstance(t *testing.T) {
 		t.Fatal("main instance must keep running")
 	}
 }
+
+// DIAL_LIVE_DUP=<scratch dir>: launching an instance that already runs must
+// focus it, never start a second process on the same data dir.
+func TestLiveNoDuplicateLaunch(t *testing.T) {
+	dir := os.Getenv("DIAL_LIVE_DUP")
+	if dir == "" {
+		t.Skip("set DIAL_LIVE_DUP")
+	}
+	os.MkdirAll(dir, 0o700)
+	if err := Claude.Launch(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer Claude.Quit(dir, 20*time.Second)
+	if !Claude.WaitRunning(dir, 30*time.Second) {
+		t.Fatal("did not start")
+	}
+	time.Sleep(2 * time.Second)
+	_ = Claude.Launch(dir, nil) // second request: must not spawn another
+	time.Sleep(3 * time.Second)
+	if n := len(Claude.PIDs(procs.List(), dir)); n != 1 {
+		t.Fatalf("%d processes on one data dir", n)
+	}
+}

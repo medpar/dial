@@ -18,6 +18,7 @@ final class Store: ObservableObject {
     }
 
     var onChange: (() -> Void)?
+    var closeMenu: (() -> Void)?
 
     @AppStorage("refreshMinutes") var refreshMinutes: Int = 5
     @AppStorage("showPercent") var showPercent: Bool = false
@@ -67,19 +68,22 @@ final class Store: ObservableObject {
         onChange?()
     }
 
-    func use(_ provider: String, _ p: ProfileStatus, scope: String? = nil) async {
+    /// Switches the CLI (and remotes) to p. With `bringForward`, p's desktop
+    /// window also comes to the front (or opens); windows never trade
+    /// accounts as a side effect.
+    func use(_ provider: String, _ p: ProfileStatus, flags: [String] = ["--show"]) async {
         busy = "\(provider):\(p.id)"
         defer { busy = nil }
         do {
-            let r = try await DialClient.use(provider, p.id, scope: scope)
+            let r = try await DialClient.use(provider, p.id, flags: flags)
             var parts: [String] = []
             if r.cli == "ok" { parts.append("CLI") }
-            if r.desktop.hasPrefix("ok") { parts.append("app") }
+            if r.desktop.hasPrefix("ok") { parts.append(provider == "claude" ? "window" : "app") }
             for s in r.remotes ?? [] where s.ok { parts.append(s.remote) }
             var text = parts.isEmpty ? "" : "\(r.label) · \(parts.joined(separator: " + "))"
             var ok = r.ok
             if r.cli != "ok" && r.cli != "skipped" { text = r.cli; ok = false }
-            else if !r.desktop.hasPrefix("ok") && !r.desktop.hasPrefix("skipped") && r.desktop != "" { text += (text.isEmpty ? "" : " · ") + "app: " + r.desktop; ok = false }
+            else if !r.desktop.hasPrefix("ok") && !r.desktop.hasPrefix("skipped") && r.desktop != "" { text += (text.isEmpty ? "" : " · ") + r.desktop; ok = false }
             if let bad = r.remotes?.first(where: { !$0.ok }) { text += " · " + (bad.message ?? bad.remote); ok = false }
             if let w = r.warnings?.first { text += " · " + w }
             show(text.isEmpty ? "Switched to \(r.label)" : text, ok: ok)
@@ -90,16 +94,46 @@ final class Store: ObservableObject {
         Task { await load(refresh: true) }
     }
 
-    func openWindow(_ provider: String, _ p: ProfileStatus) async {
+    /// Brings p's desktop window to the front, opening it if it's closed.
+    /// Focusing happens here, natively, so it targets the exact instance.
+    func focus(_ provider: String, _ p: ProfileStatus) async {
         busy = "\(provider):\(p.id)"
         defer { busy = nil }
         do {
-            let r = try await DialClient.open(provider, p.id)
-            show(r.ok ? "Opened \(p.label) in its own window" : (r.message ?? "Could not open"), ok: r.ok)
+            let w = try await DialClient.whereIs(provider, p.id)
+            if w.running, let pid = w.pid {
+                closeMenu?()
+                Activator.activate(pid: pid)
+            } else {
+                let r = try await DialClient.show(provider, p.id)
+                if r.ok { closeMenu?() } else { show(r.message ?? "Could not open", ok: false) }
+            }
         } catch {
             show(error.localizedDescription, ok: false)
         }
         await load(refresh: false)
+    }
+
+    func openWindow(_ provider: String, _ p: ProfileStatus) async { await focus(provider, p) }
+
+    /// Makes p the main Claude window's account (quits and relaunches it).
+    func makeMain(_ p: ProfileStatus) async {
+        await use("claude", p, flags: ["--desktop", "--no-remote"])
+    }
+
+    func makeDockIcons(pin: Bool, replace: Bool = false) {
+        show("Making Dock icons…", ok: true)
+        Task.detached {
+            let made = Launchers.makeAll(pin: pin, replace: replace, log: { _ in })
+            await MainActor.run {
+                if made.isEmpty {
+                    self.show("No desktop accounts yet: sign one in to Claude Desktop first", ok: false)
+                } else {
+                    self.show(replace ? "Dock now has one icon per account" : pin ? "Added \(made.count) Dock icons" : "Dock icons are in ~/Applications/Dial — drag them to the Dock", ok: true)
+                    if !pin { NSWorkspace.shared.open(Launchers.folder) }
+                }
+            }
+        }
     }
 
     func show(_ text: String, ok: Bool) {

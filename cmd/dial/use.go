@@ -94,38 +94,7 @@ func switchTo(c *core.Core, p vault.Profile, o opts) UseResult {
 			res.Desktop = "ok"
 		}
 	case p.Provider == vault.Claude:
-		ds := c.ClaudeDesktopStatus()
-		if !ds.Installed {
-			res.Desktop = "skipped: Claude Desktop not installed"
-			break
-		}
-		saved := false
-		for _, a := range ds.Accounts {
-			if a.AccountUUID == p.AccountID {
-				saved = a.Saved || a.Live
-				if a.Live {
-					res.Desktop = "ok"
-				}
-			}
-		}
-		if res.Desktop == "ok" {
-			break
-		}
-		if !saved {
-			res.Desktop = "skipped: no Desktop login saved for this account (dial desktop add claude)"
-			if onlyDesktop {
-				res.OK = false
-			}
-			break
-		}
-		if err := c.SwitchClaudeDesktop(p); err != nil {
-			res.Desktop = err.Error()
-			if onlyDesktop {
-				res.OK = false
-			}
-		} else {
-			res.Desktop = "ok"
-		}
+		res.Desktop = claudeDesktop(c, p, o, onlyDesktop, &res)
 	}
 	if res.CLI == "ok" && !o.has("no-remote", "local") {
 		res.Remotes = c.SyncRemotes(ctx, p)
@@ -134,6 +103,44 @@ func switchTo(c *core.Core, p vault.Profile, o opts) UseResult {
 	c.FollowExternalChanges(ctx)
 	res.Warnings = c.Warnings
 	return res
+}
+
+// claudeDesktop applies a switch to Claude Desktop. Each account keeps its
+// own window, so a switch never moves accounts between windows behind the
+// user's back:
+//   - default: nothing changes on the desktop;
+//   - --show: the account's window comes forward (or opens);
+//   - --desktop / `dial desktop use`: the main window's account is swapped.
+func claudeDesktop(c *core.Core, p vault.Profile, o opts, swap bool, res *UseResult) string {
+	if !c.ClaudeDesktopStatus().Installed {
+		return "skipped: Claude Desktop not installed"
+	}
+	w := c.WhereDesktop(p)
+	switch {
+	case swap:
+		switch w.Kind {
+		case "none":
+			res.OK = false
+			return "no Desktop sign-in for this account yet (dial desktop add claude)"
+		case "window":
+			res.OK = false
+			return p.Display() + " is open in its own window; close it before making it the main window's account"
+		}
+		if err := c.SwitchClaudeDesktop(p); err != nil {
+			res.OK = false
+			return err.Error()
+		}
+		return "ok"
+	case o.has("show"):
+		if _, err := c.ShowDesktop(p); err != nil {
+			if w.Kind == "none" {
+				return "skipped: no Desktop sign-in for this account yet (Add account → Claude Desktop)"
+			}
+			return err.Error()
+		}
+		return "ok"
+	}
+	return "skipped"
 }
 
 func reportUse(res UseResult) {

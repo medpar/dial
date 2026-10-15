@@ -35,10 +35,13 @@ type Config struct {
 	// RefreshInactive keeps stored logins alive by refreshing tokens of
 	// profiles that are not live anywhere before they expire.
 	RefreshInactive bool `json:"refresh_inactive"`
+	// DesktopMainFirst starts the main Claude window before an account's own
+	// window, so the Dock's pinned Claude icon stays bound to the main one.
+	DesktopMainFirst bool `json:"desktop_main_first"`
 }
 
 func DefaultConfig() Config {
-	return Config{SwitchDesktop: true, RestartApps: true, UsageTTL: 120, RefreshInactive: true}
+	return Config{SwitchDesktop: true, RestartApps: true, UsageTTL: 120, RefreshInactive: true, DesktopMainFirst: true}
 }
 
 func configPath() string { return filepath.Join(paths.DialHome(), "config.json") }

@@ -257,12 +257,11 @@ func (c *Core) AddClaudeDesktop(opt SigninOptions) (DesktopAccount, error) {
 		}
 	}
 	restore := func(extra ...string) {
+		dirs := make([]string, 0, len(before)+len(extra))
 		for _, in := range before {
-			_ = app.Launch(in.Dir, nil)
+			dirs = append(dirs, in.Dir)
 		}
-		for _, dir := range extra {
-			_ = app.Launch(dir, nil)
-		}
+		launchInOrder(app, append(dirs, extra...))
 	}
 	dir, err := desktop.NewSigninDir()
 	if err != nil {
@@ -364,6 +363,40 @@ func waitForSignin(app desktop.App, dir string, timeout time.Duration) (desktop.
 	return desktop.DesktopAccount{}, errors.New("timed out waiting for the sign-in")
 }
 
+// launchInOrder starts the main window (default data dir) first and waits
+// for it, then every other dir. The Dock binds its pinned Claude icon to the
+// first instance it sees, so this keeps that icon on the main window.
+func launchInOrder(app desktop.App, dirs []string) {
+	var rest []string
+	for _, d := range dirs {
+		if filepath.Clean(d) == filepath.Clean(app.DataDir()) && !app.Overridden() {
+			if app.Launch(d, nil) == nil {
+				app.WaitRunning(d, 20*time.Second)
+			}
+			continue
+		}
+		rest = append(rest, d)
+	}
+	for _, d := range rest {
+		_ = app.Launch(d, nil)
+	}
+}
+
+// ensureMainFirst starts the signed-in main window before another window
+// opens, when it isn't running yet.
+func (c *Core) ensureMainFirst(app desktop.App) {
+	if !c.Config.DesktopMainFirst || app.Overridden() {
+		return
+	}
+	main := app.DataDir()
+	if app.Running(main) || !desktop.ClaudeAccountIn(main).LoggedIn {
+		return
+	}
+	if app.Launch(main, nil) == nil {
+		app.WaitRunning(main, 20*time.Second)
+	}
+}
+
 // OpenClaudeWindow runs p's Claude Desktop login in its own window.
 func (c *Core) OpenClaudeWindow(p vault.Profile) error {
 	app := desktop.Claude
@@ -375,7 +408,7 @@ func (c *Core) OpenClaudeWindow(p vault.Profile) error {
 		if in.Default {
 			return fmt.Errorf("%s is the main Claude window's account; switch the main window to another account first", p.Display())
 		}
-		return app.Focus(in.Dir)
+		return desktop.Activate(in.PID)
 	}
 	if cur := desktop.ClaudeAccountIn(app.DataDir()); cur.LoggedIn && cur.AccountUUID == p.AccountID {
 		return fmt.Errorf("%s is the main Claude window's account; switch the main window to another account first", p.Display())
@@ -384,7 +417,91 @@ func (c *Core) OpenClaudeWindow(p vault.Profile) error {
 	if !desktop.ClaudeAccountIn(home).LoggedIn {
 		return fmt.Errorf("no saved Claude Desktop login for %s yet: run `dial desktop add claude` and sign in as %s", p.Display(), p.Display())
 	}
+	c.ensureMainFirst(app)
 	return app.Launch(home, nil)
+}
+
+// Where reports where an account's desktop app is: its main window, its own
+// window, saved but closed, or nowhere.
+type Where struct {
+	Provider string `json:"provider"`
+	Profile  string `json:"profile"`
+	Kind     string `json:"kind"` // main | window | saved | none
+	Running  bool   `json:"running"`
+	PID      int    `json:"pid,omitempty"`
+	Dir      string `json:"dir,omitempty"`
+}
+
+// WhereDesktop locates p's desktop app instance.
+func (c *Core) WhereDesktop(p vault.Profile) Where {
+	w := Where{Provider: string(p.Provider), Profile: p.ID, Kind: "none"}
+	switch p.Provider {
+	case vault.Claude:
+		app := desktop.Claude
+		if !app.Installed() {
+			return w
+		}
+		v := c.reconcileClaude()
+		if in, ok := v.runningWith(p.AccountID); ok {
+			w.Running, w.PID, w.Dir = true, in.PID, in.Dir
+			w.Kind = "window"
+			if in.Default {
+				w.Kind = "main"
+			}
+			return w
+		}
+		if cur := desktop.ClaudeAccountIn(app.DataDir()); cur.LoggedIn && cur.AccountUUID == p.AccountID {
+			w.Kind, w.Dir = "main", app.DataDir()
+			return w
+		}
+		if desktop.ClaudeAccountIn(desktop.ClaudeHome(p.AccountID)).LoggedIn {
+			w.Kind, w.Dir = "saved", desktop.ClaudeHome(p.AccountID)
+		}
+	case vault.Codex:
+		app := desktop.Codex
+		if !app.Installed() {
+			return w
+		}
+		if c.ActiveID(vault.Codex) == p.ID {
+			w.Kind, w.Dir = "main", app.DataDir()
+			if pid := app.PID(app.DataDir()); pid > 0 {
+				w.Running, w.PID = true, pid
+			}
+			return w
+		}
+		data := desktop.CodexInstanceData(p.ID)
+		if pid := app.PID(data); pid > 0 {
+			w.Kind, w.Running, w.PID, w.Dir = "window", true, pid, data
+			return w
+		}
+		if a, err := c.LoadCodex(p); err == nil && a.HasLogin() {
+			w.Kind, w.Dir = "saved", data
+		}
+	}
+	return w
+}
+
+// ShowDesktop brings p's desktop app forward without changing which account
+// any window holds: its running window comes to the front, a closed one
+// opens (in its own window for Claude). The main Claude window only
+// changes account through SwitchClaudeDesktop (`dial desktop use`).
+func (c *Core) ShowDesktop(p vault.Profile) (Where, error) {
+	w := c.WhereDesktop(p)
+	switch {
+	case w.Running:
+		return w, desktop.Activate(w.PID)
+	case w.Kind == "main" && p.Provider == vault.Claude:
+		err := desktop.Claude.Launch(desktop.Claude.DataDir(), nil)
+		return w, err
+	case w.Kind == "main" && p.Provider == vault.Codex:
+		err := desktop.Codex.Launch(desktop.Codex.DataDir(), nil)
+		return w, err
+	case w.Kind == "saved" && p.Provider == vault.Claude:
+		return w, c.OpenClaudeWindow(p)
+	case w.Kind == "saved" && p.Provider == vault.Codex:
+		return w, c.OpenCodexWindow(p)
+	}
+	return w, fmt.Errorf("no desktop sign-in for %s yet", p.Display())
 }
 
 // ------------------------------------------------------------------ Codex

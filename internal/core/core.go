@@ -71,21 +71,9 @@ func ClaudePlan(sub, tier string) string {
 
 // ---------------------------------------------------------------- Claude
 
-// LiveClaude identifies the login currently in target t.
-func (c *Core) LiveClaude(t claude.Target) (*claude.OAuth, claude.Account, error) {
-	o, err := t.ReadOAuth()
-	if err != nil {
-		return nil, claude.Account{}, err
-	}
-	raw, err := t.ReadAccount()
-	if err != nil {
-		return o, claude.Account{}, err
-	}
-	return o, claude.ParseAccount(raw), nil
-}
-
 // ImportClaude stores the login found in t, creating or updating the
-// matching profile. label is used only when a profile is created.
+// matching profile. label is used only when a profile is created. The
+// account is taken from the credential itself, never from .claude.json.
 func (c *Core) ImportClaude(ctx context.Context, t claude.Target, label, origin string) (vault.Profile, bool, error) {
 	o, err := t.ReadOAuth()
 	if err != nil {
@@ -94,22 +82,28 @@ func (c *Core) ImportClaude(ctx context.Context, t claude.Target, label, origin 
 	if !o.HasLogin() {
 		return vault.Profile{}, false, errors.New("no Claude login found (run `claude auth login` or `dial add claude`)")
 	}
-	rawAcct, _ := t.ReadAccount()
+	id := c.identifyClaude(ctx, o)
+	if id.Key == "" && o.AccessExpired() {
+		// An expired, unknown login: refresh it in place (as Claude Code
+		// would on next use) so the API can say whose it is.
+		if busy := len(procs.ClaudeCLIs(procs.List())) > 0; busy && t == claude.DefaultTarget() {
+			return vault.Profile{}, false, errors.New("the Claude login is expired and claude is running; finish that session and retry")
+		}
+		if err := claude.Refresh(ctx, o); err != nil {
+			return vault.Profile{}, false, err
+		}
+		if err := t.WriteOAuth(o); err != nil {
+			return vault.Profile{}, false, err
+		}
+		id = c.identifyClaude(ctx, o)
+	}
+	if id.Key == "" {
+		return vault.Profile{}, false, errors.New("could not identify the Claude login (offline?)")
+	}
+	rawAcct := id.Account
 	acct := claude.ParseAccount(rawAcct)
-	if acct.AccountUUID == "" || acct.OrganizationUUID == "" {
-		// Credentials without a matching .claude.json: ask the API who this is.
-		if o.AccessExpired() {
-			if err := claude.Refresh(ctx, o); err != nil {
-				return vault.Profile{}, false, err
-			}
-			_ = t.WriteOAuth(o)
-		}
-		prof, err := claude.FetchProfile(ctx, o)
-		if err != nil {
-			return vault.Profile{}, false, fmt.Errorf("identify Claude login: %w", err)
-		}
-		rawAcct = claude.AccountFromProfile(prof)
-		acct = claude.ParseAccount(rawAcct)
+	if acct.Key() != id.Key {
+		return vault.Profile{}, false, errors.New("could not identify the Claude login")
 	}
 	p, created, err := c.storeClaude(o, rawAcct, acct, label, origin, "")
 	if err == nil {
@@ -168,26 +162,37 @@ func (c *Core) storeClaude(o *claude.OAuth, rawAcct []byte, acct claude.Account,
 	return p, true, c.SaveClaude(p, &ClaudeCreds{OAuth: o, Account: rawAcct})
 }
 
-// SyncBackClaude copies a newer live login in t back into its profile and
-// returns that profile. Unknown live logins are imported so a manual
-// `/login` is never lost.
+// SyncBackClaude copies a newer live login in t back into the profile it
+// belongs to and returns that profile. A live login for an account dial
+// doesn't know yet is imported, so a manual `/login` is never lost; one
+// that can't be identified is left alone.
 func (c *Core) SyncBackClaude(ctx context.Context, t claude.Target) (vault.Profile, bool) {
-	o, acct, err := c.LiveClaude(t)
-	if err != nil || !o.HasLogin() || acct.AccountUUID == "" {
+	o, id, err := c.liveClaude(ctx, t)
+	if err != nil || !o.HasLogin() || id.Key == "" {
 		return vault.Profile{}, false
 	}
-	p, ok := c.Vault.FindByKey(vault.Claude, acct.Key())
-	if !ok {
-		p, _, err = c.ImportClaude(ctx, t, "", "import")
-		return p, err == nil
+	if !id.Found {
+		acct := claude.ParseAccount(id.Account)
+		if acct.Key() != id.Key {
+			return vault.Profile{}, false
+		}
+		p, _, err := c.storeClaude(o, id.Account, acct, "", "import", "")
+		if err != nil {
+			return vault.Profile{}, false
+		}
+		return c.enrichClaude(ctx, p, o), true
 	}
+	p := id.Profile
 	cur, err := c.LoadClaude(p)
 	if err != nil || cur.OAuth.Equal(o) {
 		return p, true
 	}
 	if o.Newer(cur.OAuth) || !cur.OAuth.HasLogin() {
-		raw, _ := t.ReadAccount()
-		_ = c.SaveClaude(p, &ClaudeCreds{OAuth: o, Account: raw})
+		acct := cur.Account
+		if len(acct) == 0 {
+			acct = id.Account
+		}
+		_ = c.SaveClaude(p, &ClaudeCreds{OAuth: o, Account: acct})
 	}
 	return p, true
 }
@@ -340,11 +345,11 @@ func (c *Core) UseCodex(p vault.Profile, home string) error {
 func (c *Core) LiveKey(p vault.Provider) string {
 	switch p {
 	case vault.Claude:
-		o, acct, err := c.LiveClaude(claude.DefaultTarget())
-		if err != nil || !o.HasLogin() || acct.AccountUUID == "" {
+		_, id, err := c.liveClaude(context.Background(), claude.DefaultTarget())
+		if err != nil {
 			return ""
 		}
-		return acct.Key()
+		return id.Key
 	case vault.Codex:
 		a, err := codex.Load(codex.LivePath())
 		if err != nil || !a.HasLogin() {
@@ -353,6 +358,15 @@ func (c *Core) LiveKey(p vault.Provider) string {
 		return a.Identity().Key()
 	}
 	return ""
+}
+
+// LiveKeyFor returns the account key of the Claude login in target t.
+func (c *Core) LiveKeyFor(t claude.Target) string {
+	_, id, err := c.liveClaude(context.Background(), t)
+	if err != nil {
+		return ""
+	}
+	return id.Key
 }
 
 // ActiveID returns the id of the profile live in the default location.

@@ -14,8 +14,9 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o 
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o dist/dial-linux-arm64 ./cmd/dial
 
 echo "→ menu bar app"
-(cd macos && swift build -c release --product Dial >/dev/null)
-BIN="$(cd macos && swift build -c release --show-bin-path)/Dial"
+(cd macos && swift build -c release >/dev/null)
+BINDIR="$(cd macos && swift build -c release --show-bin-path)"
+BIN="$BINDIR/Dial"
 
 APP=dist/Dial.app
 rm -rf "$APP"
@@ -44,6 +45,30 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+# Template for per-account Dock launchers (Dial → Dock icons).
+L="$APP/Contents/Helpers/DialLauncher.app"
+mkdir -p "$L/Contents/MacOS" "$L/Contents/Resources"
+cp "$BINDIR/DialLauncher" "$L/Contents/MacOS/DialLauncher"
+strip -x "$L/Contents/MacOS/DialLauncher" 2>/dev/null || true
+cp macos/Resources/Dial.icns "$L/Contents/Resources/AppIcon.icns"
+cat > "$L/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Dial Launcher</string>
+  <key>CFBundleIdentifier</key><string>io.github.medpar.dial.launch.template</string>
+  <key>CFBundleExecutable</key><string>DialLauncher</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION%%-*}</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>DialTarget</key><string></string>
+</dict>
+</plist>
+PLIST
+codesign --force --sign - "$L" >/dev/null 2>&1
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1
 (cd dist && rm -f Dial-macos.zip && ditto -c -k --keepParent Dial.app Dial-macos.zip)
 echo "✓ dist/Dial.app ($(du -sh "$APP" | cut -f1)), dist/dial-linux-amd64"
