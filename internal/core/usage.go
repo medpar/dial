@@ -38,21 +38,31 @@ type liveInfo struct {
 	codexKey      string
 	claudeCLIBusy bool
 	codexCLIBusy  bool
+	// claudeUnknown: the CLI holds a Claude login dial can't identify yet.
+	// It could be any profile's account, so no Claude profile is refreshed
+	// until it is identified (a refresh with a superseded token can revoke
+	// the live one).
+	claudeUnknown bool
 }
 
 func (c *Core) live() liveInfo {
 	ps := procs.List()
-	return liveInfo{
-		claudeKey:     c.LiveKey(vault.Claude),
+	li := liveInfo{
 		codexKey:      c.LiveKey(vault.Codex),
 		claudeCLIBusy: len(procs.ClaudeCLIs(ps)) > 0,
 		codexCLIBusy:  len(procs.CodexCLIs(ps)) > 0,
 	}
+	if o, id, err := c.liveClaude(context.Background(), claude.DefaultTarget()); err == nil && o.HasLogin() {
+		li.claudeKey = id.Key
+		li.claudeUnknown = id.Key == ""
+	}
+	return li
 }
 
 // Usage returns reports for profiles, fetching stale ones concurrently.
 func (c *Core) Usage(ctx context.Context, profiles []vault.Profile, opt UsageOptions) []usage.Report {
 	cache := usage.LoadCache()
+	c.healLiveClaude(ctx)
 	li := c.live()
 	out := make([]usage.Report, len(profiles))
 	var wg sync.WaitGroup
@@ -142,6 +152,9 @@ func (c *Core) claudeUsage(ctx context.Context, p vault.Profile, li liveInfo, pr
 	if o.AccessExpired() {
 		if isLive && li.claudeCLIBusy {
 			return usage.Report{}, errors.New("token expired; the running claude CLI will refresh it")
+		}
+		if !isLive && li.claudeUnknown {
+			return usage.Report{}, errors.New("token expired; waiting until the CLI's own login is identified before refreshing")
 		}
 		if err := c.refreshClaude(ctx, p, isLive, prev, false); err != nil {
 			return usage.Report{}, expired(p, err)
@@ -304,6 +317,7 @@ func (c *Core) refreshCodex(ctx context.Context, p vault.Profile, isLive bool, p
 // Codex: last refresh older than 5 days. Claude: refresh token expiring
 // within 3 days. Returns the ids it refreshed.
 func (c *Core) KeepAlive(ctx context.Context) []string {
+	c.healLiveClaude(ctx)
 	li := c.live()
 	var done []string
 	all, _ := c.Vault.All()
@@ -324,7 +338,7 @@ func (c *Core) KeepAlive(ctx context.Context) []string {
 				done = append(done, "codex:"+p.ID)
 			}
 		case vault.Claude:
-			if p.Key() == li.claudeKey || c.instanceRunning(p) {
+			if p.Key() == li.claudeKey || li.claudeUnknown || c.instanceRunning(p) {
 				continue
 			}
 			cr, err := c.LoadClaude(p)

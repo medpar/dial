@@ -11,6 +11,7 @@ import (
 	"github.com/medpar/dial/internal/claude"
 	"github.com/medpar/dial/internal/fsutil"
 	"github.com/medpar/dial/internal/paths"
+	"github.com/medpar/dial/internal/procs"
 	"github.com/medpar/dial/internal/vault"
 )
 
@@ -130,4 +131,40 @@ func (c *Core) liveClaude(ctx context.Context, t claude.Target) (*claude.OAuth, 
 		return nil, identity{}, err
 	}
 	return o, c.identifyClaude(ctx, o), nil
+}
+
+// healLiveClaude resolves an expired CLI login dial can't identify by doing
+// what Claude Code would do on its next run, refreshing it in place, but only
+// while no claude process could be holding it. Afterwards it is identified
+// and folded back into its profile, replacing that profile's superseded copy.
+func (c *Core) healLiveClaude(ctx context.Context) {
+	t := claude.DefaultTarget()
+	o, err := t.ReadOAuth()
+	if err != nil || !o.HasLogin() || !o.AccessExpired() {
+		return
+	}
+	if id := c.identifyClaude(ctx, o); id.Key != "" {
+		return
+	}
+	if len(procs.ClaudeCLIs(procs.List())) > 0 {
+		return
+	}
+	l, err := c.Lock()
+	if err != nil {
+		return
+	}
+	defer l.Release()
+	if o, err = t.ReadOAuth(); err != nil || !o.HasLogin() || !o.AccessExpired() {
+		return
+	}
+	if id := c.identifyClaude(ctx, o); id.Key != "" {
+		return
+	}
+	if err := claude.Refresh(ctx, o); err != nil {
+		return
+	}
+	if err := t.WriteOAuth(o); err != nil {
+		return
+	}
+	c.SyncBackClaude(ctx, t)
 }

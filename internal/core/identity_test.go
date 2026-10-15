@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/medpar/dial/internal/claude"
+	"github.com/medpar/dial/internal/procs"
+	"github.com/medpar/dial/internal/vault"
 )
 
 // Claude Desktop's built-in Claude Code rewrites ~/.claude.json from every
@@ -96,5 +98,64 @@ func TestSyncBackIgnoresClaudeJSON(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(os.Getenv("DIAL_HOME"), "identity.json")); err != nil {
 		t.Fatal("identity cache not written")
+	}
+}
+
+// The CLI renewed its login since dial last saw it, then went idle: the live
+// login is expired and unknown, the stored copy is superseded. dial must
+// renew the live one (as Claude Code would) and never send the superseded
+// refresh token, which could revoke the live login.
+func TestHealExpiredUnknownLiveLogin(t *testing.T) {
+	if len(procs.ClaudeCLIs(procs.List())) > 0 {
+		t.Skip("a claude CLI is running on this machine; healing is (correctly) skipped")
+	}
+	c := newTestCore(t)
+	t.Setenv("DIAL_CLAUDE_STORE", "file")
+	t.Setenv("HOME", t.TempDir())
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			var body map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			sent = append(sent, body["refresh_token"])
+			if body["refresh_token"] != "rA2" {
+				w.WriteHeader(400)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"access_token": "a3", "refresh_token": "rA3", "expires_in": 28800})
+		case "/profile":
+			if r.Header.Get("Authorization") != "Bearer a3" {
+				w.WriteHeader(401)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"account": map[string]any{"uuid": "A"}, "organization": map[string]any{"uuid": "orgA"}})
+		case "/usage":
+			w.Write([]byte(`{"limits":[{"kind":"session","percent":5,"is_active":true,"resets_at":"2030-01-01T00:00:00Z"}]}`))
+		}
+	}))
+	defer srv.Close()
+	claude.TokenURL, claude.ProfileURL, claude.UsageURL = srv.URL+"/token", srv.URL+"/profile", srv.URL+"/usage"
+
+	now := time.Now()
+	acctA := claudeAccount("A", "orgA", "a@x.y")
+	pA, _, _ := c.storeClaude(claudeOAuth("a1", "rA1", now.Add(-50*time.Hour)), acctA, claude.ParseAccount(acctA), "", "test", "")
+	live := claude.DefaultTarget()
+	if err := live.WriteOAuth(claudeOAuth("a2", "rA2", now.Add(-2*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	reps := c.Usage(context.Background(), []vault.Profile{pA}, UsageOptions{Force: true})
+	for _, rt := range sent {
+		if rt == "rA1" {
+			t.Fatal("superseded refresh token was sent to the token endpoint")
+		}
+	}
+	got, _ := c.LoadClaude(pA)
+	lo, _ := live.ReadOAuth()
+	if got.OAuth.RefreshToken() != "rA3" || lo.RefreshToken() != "rA3" {
+		t.Fatalf("vault %q live %q, want both rA3", got.OAuth.RefreshToken(), lo.RefreshToken())
+	}
+	if reps[0].Error != "" {
+		t.Fatalf("usage after heal: %s", reps[0].Error)
 	}
 }
