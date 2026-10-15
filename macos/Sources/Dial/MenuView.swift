@@ -102,6 +102,8 @@ struct MenuView: View {
                     Button("Replace Claude & Codex with one icon per account") { store.makeDockIcons(pin: true, replace: true) }
                     Button("Add one icon per account") { store.makeDockIcons(pin: true) }
                     Button("Make icons, I'll drag them myself") { store.makeDockIcons(pin: false) }
+                    Divider()
+                    Button("Restore the original Claude & Codex icons") { store.restoreDock() }
                 }
                 Divider()
                 Picker("Refresh every", selection: Binding(get: { store.refreshMinutes }, set: { store.refreshMinutes = $0; store.schedule() })) {

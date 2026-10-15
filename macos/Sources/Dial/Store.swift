@@ -121,6 +121,13 @@ final class Store: ObservableObject {
         await use("claude", p, flags: ["--desktop", "--no-remote"])
     }
 
+    func restoreDock() {
+        Task.detached {
+            Launchers.restoreDock()
+            await MainActor.run { self.show("Original Claude and Codex Dock icons restored", ok: true) }
+        }
+    }
+
     func makeDockIcons(pin: Bool, replace: Bool = false) {
         show("Making Dock icons…", ok: true)
         Task.detached {

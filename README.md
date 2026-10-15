@@ -103,7 +103,7 @@ dial desktop use work        # make work the main window's account (the only com
 
 A switch never moves accounts between windows behind your back. Clicking an account in the menu switches the CLI (and your remotes) and brings that account's own window forward. Swapping which account the main window holds is a separate, explicit action.
 
-**One Dock icon per account.** Several Claude windows all share the same Dock icon, so a pinned Claude icon opens whichever instance macOS saw first. **⋯ → Dock icons → Replace Claude & Codex with one icon per account** (or `dial dock --replace`) creates a small launcher per account in `~/Applications/Dial` and pins them instead. Each icon is labelled with its account and always focuses, or opens, that account's window. dial also starts the main window before any other window, so even the plain Claude icon stays on the main account.
+**One Dock icon per account.** Several Claude windows all share the same Dock icon, so a pinned Claude icon opens whichever instance macOS saw first. **⋯ → Dock icons → Replace Claude & Codex with one icon per account** (or `dial dock --replace`) creates a small launcher per account in `~/Applications/Dial` and pins them instead. Each icon is labelled with its account and always focuses, or opens, that account's window. `dial dock --restore` (or **Dock icons → Restore the original Claude & Codex icons**) undoes it. dial also starts the main window before any other window, so even the plain Claude icon stays on the main account.
 
 **How sign-in works.** Claude Desktop finishes a sign-in through a `claude://` link that only the window which started it accepts, and macOS delivers that link to just one running Claude window. When several were open, the sign-in often landed in the wrong one and was ignored. `dial desktop add` therefore:
 
@@ -200,7 +200,7 @@ dial import [live|codex-auth|cps]
 dial ls | rename <account> <label> [--id] | rm <account>
 dial run <account> [-- args]  dial env <account>    dial open <account>
 dial desktop [add claude | login <account> | use <account> | where <account>]
-dial dock [--pin | --replace] one Dock icon per account
+dial dock [--pin | --replace | --restore]   per-account Dock icons, or back to the originals
 dial remote add|ls|rm|status|seed|sync
 dial usage [account…]         dial watch            dial waybar
 dial keepalive                dial follow           dial doctor

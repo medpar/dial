@@ -37,6 +37,7 @@ SIDE BY SIDE
   dial show <account>           bring an account's desktop window to the front
   dial dock [--pin|--replace]   one Dock icon per account; --replace swaps out the generic
                                 Claude/Codex icons so each icon is exactly one account
+  dial dock --restore           remove them and bring back the original Claude/Codex icons
   dial desktop                  desktop app status
   dial desktop add claude       sign another account into Claude Desktop (opens it in its own window)
   dial desktop login <account>  renew an account's Claude Desktop sign-in

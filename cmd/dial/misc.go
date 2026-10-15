@@ -157,10 +157,13 @@ func cmdDock(args []string) {
 		dief("Dial.app is not installed; dock launchers need it")
 	}
 	a := []string{"--make-launchers"}
-	if o.has("pin") {
+	if o.has("restore", "remove", "off") {
+		a = []string{"--restore-dock"}
+	}
+	if o.has("pin") && a[0] != "--restore-dock" {
 		a = append(a, "--pin")
 	}
-	if o.has("replace") {
+	if o.has("replace") && a[0] != "--restore-dock" {
 		a = append(a, "--replace")
 	}
 	cmd := exec.Command(app, a...)

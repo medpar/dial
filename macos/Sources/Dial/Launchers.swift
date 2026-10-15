@@ -218,6 +218,39 @@ enum Launchers {
         _ = shell("/usr/bin/killall", ["Dock"])
     }
 
+    /// Undoes Dock icons: removes every launcher from the Dock, puts the
+    /// original Claude and Codex (ChatGPT) icons back where the launchers
+    /// were, and deletes the launchers.
+    static func restoreDock() {
+        let key = "persistent-apps" as CFString
+        let domain = "com.apple.dock" as CFString
+        var tiles = (CFPreferencesCopyAppValue(key, domain) as? [[String: Any]]) ?? []
+        func url(of tile: [String: Any]) -> String {
+            ((tile["tile-data"] as? [String: Any])?["file-data"] as? [String: Any])?["_CFURLString"] as? String ?? ""
+        }
+        let ours = folder.absoluteString
+        let at = tiles.firstIndex { url(of: $0).hasPrefix(ours) } ?? tiles.count
+        let before = tiles.count
+        tiles.removeAll { url(of: $0).hasPrefix(ours) }
+        var insertAt = min(at, tiles.count)
+        for bundleID in ["com.anthropic.claudefordesktop", "com.openai.codex"] {
+            guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { continue }
+            let u = app.absoluteString.hasSuffix("/") ? app.absoluteString : app.absoluteString + "/"
+            if tiles.contains(where: { url(of: $0) == u }) { continue }
+            tiles.insert(["tile-data": ["file-data": ["_CFURLString": u, "_CFURLStringType": 15],
+                                        "file-label": app.deletingPathExtension().lastPathComponent,
+                                        "bundle-identifier": bundleID],
+                          "tile-type": "file-tile"], at: insertAt)
+            insertAt += 1
+        }
+        if tiles.count != before || insertAt != min(at, before) {
+            CFPreferencesSetAppValue(key, tiles as CFArray, domain)
+            CFPreferencesAppSynchronize(domain)
+            _ = shell("/usr/bin/killall", ["Dock"])
+        }
+        try? FileManager.default.removeItem(at: folder)
+    }
+
     @discardableResult
     static func shell(_ path: String, _ args: [String]) -> String? {
         let p = Process()
